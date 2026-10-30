@@ -171,7 +171,20 @@ python main.py --set-model deepseek --key sk-xxxx   # 存下模型选择
 
 **1）网页端（推荐，改完不用重启）**
 
-启动 `web.py` → 打开「模型」标签页：
+启动 `web.py` → 打开「模型」标签页。最省事的用法是**快速选择**：
+一列精选卡片（免费/便宜/长文本/综合最强各一档），**点一张卡片，
+厂商、模型名、接口地址、视觉模型全部自动填好**，只需要再填密钥：
+
+| 卡片 | 说明 |
+|---|---|
+| 🆓 qwen2.5:7b · 本地 Ollama | 免费，数据不出本机 |
+| 💰 deepseek-v4-flash · DeepSeek | 大厂里最便宜，中文强 |
+| 🎁 glm-5.3-flash · 智谱 GLM | 有免费额度，原生会看图 |
+| 📄 kimi-k3 · Kimi | 超长上下文 |
+| ⭐ qwen3.8-max · 通义千问 | 综合最强档 |
+| 🧩 DeepSeek-V4-Flash · 硅基流动 | 一个 key 调多家开源模型 |
+
+想用列表外的模型，展开「高级设置」手动选厂商、填任意模型名：
 
 | 步骤 | 说明 |
 |---|---|
@@ -222,6 +235,53 @@ MODEL=deepseek-v4-flash
 **明文**、只在本机、已在 `.gitignore` 里，不会跟着代码推到 GitHub；界面只显示掩码。
 为什么不明文加密：本地单用户工具加一层密码，最常见的结局是用户自己忘了密码、
 密钥找不回来。需要更严的话请用系统的密钥管理（或只填临时 key 用完就清除）。
+
+## HTTP API（程序调用）
+
+网页底部「Use via API」打开的是**接口文档页**（`http://127.0.0.1:7860/?view=api`），
+正常使用界面访问 `http://127.0.0.1:7860/` 就行。对外只暴露 10 个端点，
+都是人工命名的；回车提交、状态刷新、页面初始化这类界面内部动作不占用端点。
+
+| 端点 | 入参 | 作用 |
+|---|---|---|
+| `/chat` | message, history | 对话（返回完整历史，回复取 `history[-1]`） |
+| `/reset` | — | 清空会话上下文 |
+| `/analyze` | file, also_ingest | 上传文档或图片 → 分析重点 |
+| `/ingest` | file | 上传文件 → 解析入库 |
+| `/stats` | — | 知识库状态 |
+| `/provider_info` | pid | 查某厂商的默认模型与接口地址 |
+| `/test_model` | pid, model, key, base_url, vision | 测试连通性 |
+| `/apply_model` | 同上 | 保存并启用（热切换，不用重启） |
+| `/clear_model` | — | 清除界面保存的配置 |
+| `/save_style` | style | 设置回复风格 |
+
+Python 客户端：
+
+```python
+from gradio_client import Client, handle_file
+
+client = Client("http://127.0.0.1:7860")
+
+# 对话
+result = client.predict(message="帮我算一下 1280*0.123", history=[], api_name="/chat")
+reply = result[1][-1]["content"]
+
+# 分析一份文档
+result = client.predict(
+    file_obj=handle_file("C:/资料/合同.pdf"),
+    also_ingest=False,
+    api_name="/analyze",
+)
+print(result)
+```
+
+不用客户端库也可以走 REST（Gradio 的两步调用，先拿 event_id 再收流式结果）：
+
+```bash
+curl -X POST http://127.0.0.1:7860/gradio_api/call/stats -H "Content-Type: application/json" -d '{"data": []}'
+# → {"event_id": "..."}
+curl -N http://127.0.0.1:7860/gradio_api/call/stats/<event_id>
+```
 
 ## 加自己的工具
 

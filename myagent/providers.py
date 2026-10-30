@@ -178,6 +178,45 @@ PROVIDERS: tuple[Provider, ...] = (
 _BY_ID = {p.id: p for p in PROVIDERS}
 
 
+# 精选推荐卡片：像应用商店那样，点一张卡片就把厂商/模型/接口地址全配好，
+# 用户不需要理解"厂商"这一层。结构：(厂商 id, 模型名, 卡片上的一行话)。
+# Gradio 的单选组件不支持富文本徽章，所以用 emoji + 破折号模拟
+# 「标签 + 模型名 · 厂商 —— 理由」的卡片样式。收录标准：
+# 1) 有免费额度或本地可跑；2) 工具调用稳（本项目的核心依赖）；3) 有明确长处。
+RECOMMENDED: tuple[tuple[str, str, str], ...] = (
+    (
+        "ollama",
+        "qwen2.5:7b",
+        "🆓 qwen2.5:7b · 本地 Ollama —— 免费，数据不出本机（8G 显存首选）",
+    ),
+    (
+        "deepseek",
+        "deepseek-v4-flash",
+        "💰 deepseek-v4-flash · DeepSeek —— 大厂里最便宜，中文强、工具调用稳",
+    ),
+    (
+        "zhipu",
+        "glm-5.3-flash",
+        "🎁 glm-5.3-flash · 智谱 GLM —— 有免费额度，原生会看图，读文档截图免配视觉模型",
+    ),
+    (
+        "moonshot",
+        "kimi-k3",
+        "📄 kimi-k3 · Kimi —— 超长上下文，长合同长报告一次读完",
+    ),
+    (
+        "dashscope",
+        "qwen3.8-max",
+        "⭐ qwen3.8-max · 通义千问 —— 综合能力最强档，复杂分析任务首选",
+    ),
+    (
+        "siliconflow",
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "🧩 deepseek-ai/DeepSeek-V4-Flash · 硅基流动 —— 一个 key 调多家开源模型",
+    ),
+)
+
+
 def get(provider_id: str) -> Provider | None:
     return _BY_ID.get((provider_id or "").strip())
 

@@ -78,6 +78,23 @@ check("从地址反查本地", providers.guess_id("http://127.0.0.1:11434") == "
 check("认不出的地址归到自定义", providers.guess_id("https://my-gateway.example.com/v1") == "custom")
 check("空地址不崩", providers.guess_id("") == "custom")
 
+print("=== 2b. 精选推荐卡片 ===")
+_cards = [c for _, _, c in providers.RECOMMENDED]
+check("精选卡片存在", len(providers.RECOMMENDED) >= 5, len(providers.RECOMMENDED))
+check("卡片文案不重复", len(_cards) == len(set(_cards)))
+for pid, model, card in providers.RECOMMENDED:
+    p = providers.get(pid)
+    check(f"卡片 {model} 的厂商有效", p is not None, pid)
+    if p is None:
+        continue
+    check(
+        f"卡片 {model} 在该厂商的常用模型里",
+        model in p.models,
+        f"{model} vs {p.models}",
+    )
+    check(f"卡片 {model} 文案带模型名", model in card, card)
+    check(f"卡片 {model} 文案带理由（破折号后）", "——" in card, card)
+
 print("=== 3. 保存前校验 ===")
 ok, why = settings.validate("ollama", "qwen2.5:7b", "", "")
 check("本地模型不需要密钥", ok, why)

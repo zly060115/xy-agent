@@ -320,10 +320,15 @@ def model_status_fn():
 
 
 def on_provider_change(pid: str):
-    """切厂商：把模型名、接口地址、视觉模型、说明一起换掉"""
+    """切厂商：把模型名、接口地址、视觉模型、说明一起换掉，并清掉快速选择。
+
+    清快速选择是必须的：用户点了「智谱」的卡片后又去高级设置切到 Kimi，
+    卡片上还亮着智谱会让两张配置互相矛盾。
+    """
     p = providers.get(pid)
     if p is None:
-        return gr.update(), gr.update(), gr.update(), gr.update()
+        empty = gr.update()
+        return empty, empty, empty, empty, empty
     models = [(m, m) for m in p.models]
     note = f"**{p.name}**"
     if p.note:
@@ -335,6 +340,40 @@ def on_provider_change(pid: str):
         gr.update(value=p.base_url),
         gr.update(value=note),
         gr.update(value=(p.vision_models[0] if p.vision_models else "")),
+        gr.update(value=None),  # 快速选择卡片取消点亮
+    )
+
+
+def pick_model_fn(card: str | None):
+    """快速选择卡片：一张卡片 = 厂商 + 模型，点一下把整张配置表填好。
+
+    直接填所有字段而不是只切厂商再靠联动——联动会把模型名重置成
+    该厂商的第一个，卡片选的型号就丢了。
+    """
+    empty = gr.update()
+    if not card:
+        return empty, empty, empty, empty, empty, ""
+    pid, _, model = card.partition("::")
+    p = providers.get(pid)
+    if not p or not model:
+        return empty, empty, empty, empty, empty, ""
+    if p.need_key:
+        tip = (
+            f"**已选 {p.name} · {model}**。下一步：在下面粘贴你的密钥"
+            f"（申请：{p.key_url}）→ 点「测试连接」→ 点「保存并启用」。"
+        )
+    else:
+        tip = (
+            f"**已选 {p.name} · {model}**。本地模型不需要密钥，"
+            "直接点下方「保存并启用」。"
+        )
+    return (
+        pid,
+        gr.update(choices=[(m, m) for m in p.models], value=model),
+        p.base_url,
+        p.note,
+        (p.vision_models[0] if p.vision_models else ""),
+        tip,
     )
 
 
@@ -489,9 +528,19 @@ with gr.Blocks(title="小满 Agent") as demo:
             with gr.Row():
                 reset_btn = gr.Button("清空上下文")
 
-            send_btn.click(chat_fn, [msg_box, chatbot], [msg_box, chatbot])
-            msg_box.submit(chat_fn, [msg_box, chatbot], [msg_box, chatbot])
-            reset_btn.click(reset_chat, None, [chatbot, msg_box])
+            # api_name 必须显式写：同名函数绑两次，Gradio 会自动加 chat_fn_1 这种后缀，
+            # API 文档页就变成一堆看不出用途的重复入口。
+            send_btn.click(
+                chat_fn, [msg_box, chatbot], [msg_box, chatbot], api_name="chat"
+            )
+            # 回车发送与按钮发送是同一个动作，不单独开一个端点
+            msg_box.submit(
+                chat_fn,
+                [msg_box, chatbot],
+                [msg_box, chatbot],
+                api_visibility="private",
+            )
+            reset_btn.click(reset_chat, None, [chatbot, msg_box], api_name="reset")
 
         with gr.Tab("文档分析"):
             gr.Markdown(
@@ -519,7 +568,7 @@ with gr.Blocks(title="小满 Agent") as demo:
             )
             an_btn = gr.Button("开始分析", variant="primary")
             an_out = gr.Markdown()
-            an_btn.click(analyze_fn, [an_file, an_ingest], an_out)
+            an_btn.click(analyze_fn, [an_file, an_ingest], an_out, api_name="analyze")
 
         with gr.Tab("文档入库"):
             gr.Markdown(
@@ -531,66 +580,83 @@ with gr.Blocks(title="小满 Agent") as demo:
             )
             ingest_btn = gr.Button("解析入库", variant="primary")
             ingest_out = gr.Textbox(label="结果", lines=8, )
-            ingest_btn.click(ingest_fn, file_input, ingest_out)
+            ingest_btn.click(ingest_fn, file_input, ingest_out, api_name="ingest")
 
         with gr.Tab("知识库"):
             gr.Markdown("查看当前知识库状态")
             stats_btn = gr.Button("刷新状态")
             stats_out = gr.Textbox(label="状态", lines=6)
-            stats_btn.click(stats_fn, None, stats_out)
+            stats_btn.click(stats_fn, None, stats_out, api_name="stats")
 
         with gr.Tab("模型"):
             gr.Markdown(
-                "**换模型不用改代码、不用重启。** 选一家厂商 → 填上你自己的密钥 → "
-                "先点「测试连接」确认通 → 再点「保存并启用」。\n\n"
+                "**换模型不用改代码、不用重启。** 在「快速选择」里点一张卡片就配好；"
+                "需要密钥的粘贴一把，先「测试连接」再「保存并启用」。\n\n"
                 "密钥保存在本地数据目录的 `settings.json` 里（不进代码库、不会被推到 GitHub），"
                 "界面只显示掩码。本地 Ollama 不需要密钥。"
             )
             model_now = gr.Markdown(_status_md())
 
-            prov_dd = gr.Dropdown(
-                label="模型厂商",
-                choices=providers.choices(),
-                value=config.provider if providers.get(config.provider) else "ollama",
-            )
-            prov_note = gr.Markdown(
-                (providers.get(config.provider) or providers.get("ollama")).note
-            )
-
-            model_dd = gr.Dropdown(
-                label="模型名（下拉里是常用值，也可以直接输入任意名字）",
+            # ---- 快速选择：卡片列表，点一张 = 厂商 + 模型 + 接口地址全配好 ----
+            pick = gr.Radio(
                 choices=[
-                    (m, m)
-                    for m in (
-                        (providers.get(config.provider) or providers.get("ollama")).models
-                    )
+                    (card, f"{pid}::{model}")
+                    for pid, model, card in providers.RECOMMENDED
                 ],
-                value=config.model,
-                allow_custom_value=True,
+                label="快速选择（点一下自动配好）",
+                show_label=True,
+            )
+            pick_note = gr.Markdown()
+
+            key_tb = gr.Textbox(
+                label="API 密钥",
+                type="password",
+                placeholder=(
+                    f"已保存：{settings.mask(config.api_key)}（留空则沿用）"
+                    if config.api_key
+                    else "本地模型不需要；云端模型粘贴你自己的密钥"
+                ),
             )
 
-            with gr.Row():
-                key_tb = gr.Textbox(
-                    label="API 密钥",
-                    type="password",
-                    placeholder=(
-                        f"已保存：{settings.mask(config.api_key)}（留空则沿用）"
-                        if config.api_key
-                        else "本地模型不需要；云端模型粘贴你自己的密钥"
+            # ---- 高级设置：任意厂商 / 手填模型名 / 接口地址 / 视觉模型 ----
+            with gr.Accordion(
+                "高级设置（手动选厂商、填任意模型名、改接口地址）", open=False
+            ):
+                prov_dd = gr.Dropdown(
+                    label="模型厂商",
+                    choices=providers.choices(),
+                    value=(
+                        config.provider if providers.get(config.provider) else "ollama"
                     ),
-                    scale=3,
+                )
+                prov_note = gr.Markdown(
+                    (providers.get(config.provider) or providers.get("ollama")).note
+                )
+                model_dd = gr.Dropdown(
+                    label="模型名（下拉里是常用值，也可以直接输入任意名字）",
+                    choices=[
+                        (m, m)
+                        for m in (
+                            (
+                                providers.get(config.provider)
+                                or providers.get("ollama")
+                            ).models
+                        )
+                    ],
+                    value=config.model,
+                    allow_custom_value=True,
                 )
                 url_tb = gr.Textbox(
                     label="接口地址",
-                    value=config.base_url if config.backend == "api" else config.ollama_host,
-                    scale=3,
+                    value=(
+                        config.base_url if config.backend == "api" else config.ollama_host
+                    ),
                 )
-
-            vis_tb = gr.Textbox(
-                label="视觉模型（可留空 = 只用 OCR 读图里的文字）",
-                value=config.vision_model,
-                placeholder="例如 glm-5.3-flash；留空则不做图像理解",
-            )
+                vis_tb = gr.Textbox(
+                    label="视觉模型（可留空 = 只用 OCR 读图里的文字）",
+                    value=config.vision_model,
+                    placeholder="例如 glm-5.3-flash；留空则不做图像理解",
+                )
 
             with gr.Row():
                 test_btn = gr.Button("测试连接")
@@ -599,24 +665,38 @@ with gr.Blocks(title="小满 Agent") as demo:
 
             model_out = gr.Markdown()
 
-            prov_dd.change(
+            pick.change(
+                pick_model_fn,
+                pick,
+                [prov_dd, model_dd, url_tb, prov_note, vis_tb, pick_note],
+                api_visibility="private",
+            )
+            # 用 .input 而不是 .change：程序填值（点卡片）也会触发 .change，
+            # 会把卡片选好的模型重置成该厂商第一个；.input 只在用户手动改时触发
+            prov_dd.input(
                 on_provider_change,
                 prov_dd,
-                [model_dd, url_tb, prov_note, vis_tb],
+                [model_dd, url_tb, prov_note, vis_tb, pick],
+                api_name="provider_info",
             )
             test_btn.click(
                 test_model_fn,
                 [prov_dd, model_dd, key_tb, url_tb, vis_tb],
                 model_out,
+                api_name="test_model",
             )
+            # 保存成功后刷新顶部状态条，属于界面内部动作，不对外暴露
             apply_btn.click(
                 apply_model_fn,
                 [prov_dd, model_dd, key_tb, url_tb, vis_tb],
                 model_out,
-            ).then(model_status_fn, None, model_now)
-            clear_btn.click(clear_model_fn, None, model_out).then(
-                model_status_fn, None, model_now
+                api_name="apply_model",
+            ).then(
+                model_status_fn, None, model_now, api_visibility="private"
             )
+            clear_btn.click(
+                clear_model_fn, None, model_out, api_name="clear_model"
+            ).then(model_status_fn, None, model_now, api_visibility="private")
 
         with gr.Tab("风格"):
             gr.Markdown(
@@ -630,10 +710,11 @@ with gr.Blocks(title="小满 Agent") as demo:
             )
             style_btn = gr.Button("应用风格")
             style_out = gr.Textbox(label="结果")
-            style_btn.click(save_style, style_box, style_out)
+            style_btn.click(save_style, style_box, style_out, api_name="save_style")
 
-    demo.load(stats_fn, None, stats_out)
-    demo.load(model_status_fn, None, model_now)
+    # 页面打开时的初始化填充，属于界面内部动作，不对外暴露
+    demo.load(stats_fn, None, stats_out, api_visibility="private")
+    demo.load(model_status_fn, None, model_now, api_visibility="private")
 
 
 if __name__ == "__main__":

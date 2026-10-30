@@ -46,16 +46,35 @@ check("没有残留的启动错误", web.STARTUP_ERR == "", web.STARTUP_ERR)
 
 print("=== 2. 切厂商联动 ===")
 up = web.on_provider_change("deepseek")
-check("返回 4 个组件更新", len(up) == 4, len(up))
+check("返回 5 个组件更新（含清除快速选择）", len(up) == 5, len(up))
 check("接口地址换成 DeepSeek", "api.deepseek.com" in (up[1].get("value") or ""), up[1])
 check("模型列表非空", len(up[0].get("choices") or []) > 0)
 check("说明里带密钥申请地址", "platform.deepseek.com" in (up[2].get("value") or ""))
+check("手动切厂商会清掉点亮的卡片", up[4].get("value") is None, up[4])
 
 up = web.on_provider_change("zhipu")
 check("智谱自带视觉模型", bool(up[3].get("value")), up[3].get("value"))
 
 up = web.on_provider_change("ollama")
 check("切回本地时视觉模型是 qwen2.5vl", "qwen2.5vl" in (up[3].get("value") or ""), up[3])
+
+print("=== 2b. 快速选择卡片 ===")
+up = web.pick_model_fn("zhipu::glm-5.3-flash")
+check("卡片点选切到对应厂商", up[0] == "zhipu", up[0])
+check("卡片点选模型跟着变", up[1].get("value") == "glm-5.3-flash", up[1])
+check("接口地址自动填好", "open.bigmodel.cn" in (up[2] or ""), up[2])
+check("视觉模型自动填好", up[4] == "glm-5.3-flash", up[4])
+check("提示带密钥申请地址", "open.bigmodel.cn" in (up[5] or ""), up[5])
+
+up = web.pick_model_fn("ollama::qwen2.5:7b")
+check("本地卡片提示免密钥", "不需要密钥" in (up[5] or ""), up[5])
+check("空输入不崩", len(web.pick_model_fn(None)) == 6)
+check("未知卡片返回空提示", web.pick_model_fn("nope::x")[5] == "")
+check(
+    "卡片数量与精选推荐一致",
+    len(web.providers.RECOMMENDED) == 6,
+    len(web.providers.RECOMMENDED),
+)
 
 print("=== 3. 保存前的拦截 ===")
 msg = web.test_model_fn("deepseek", "deepseek-v4-flash", "", "", "")
