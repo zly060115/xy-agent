@@ -234,13 +234,22 @@ class RAGStore:
 
         q_grams = _query_grams(query)
         out = []
+        skipped = 0
         for i, doc in enumerate(docs):
-            vec = 1 - dists[i] if dists else 0.0
+            # 偶尔会读到残缺记录（文本为 None 或空串）。多进程同时打开同一个
+            # Chroma 目录时尤其容易碰到。这里直接跳过：一条脏数据不该让整次
+            # 检索失败——以前这种情况会抛 AttributeError，被调用方 except 吞掉，
+            # 用户看到的就是「明明入库成功，问它却说没有」。
+            if not isinstance(doc, str) or not doc.strip():
+                skipped += 1
+                continue
+            vec = 1 - dists[i] if dists and i < len(dists) else 0.0
             cover = _coverage(q_grams, doc)
+            meta = metas[i] if metas and i < len(metas) else {}
             out.append(
                 {
                     "text": doc,
-                    "source": (metas[i] or {}).get("source", "?"),
+                    "source": (meta or {}).get("source", "?"),
                     # 向量占七成、关键词覆盖占三成：语义相近但没提到关键词的片段会掉下去
                     "score": 0.7 * vec + 0.3 * cover,
                     "vector_score": vec,
@@ -273,7 +282,7 @@ def _query_grams(text: str) -> set[str]:
 
 def _coverage(grams: set[str], text: str) -> float:
     """问句里的词有多大比例出现在这段文字里（0~1）"""
-    if not grams:
+    if not grams or not text:
         return 0.0
     low = text.lower()
     hit = sum(1 for g in grams if g in low)

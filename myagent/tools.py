@@ -273,12 +273,30 @@ def tool_ingest_local_file(path: str) -> str:
     except Exception as e:
         return f"入库失败: {type(e).__name__}: {e}"
 
+    # 入库后立刻检索验证一次：写进去了 ≠ 查得到。
+    # 以前只报「已入库」，用户回头提问却查不到，窗口早就关了没法排查。
+    # 现在用文件开头的内容当探针，当场确认能查回来才算成功。
+    probe = " ".join(chunks[0].split())[:30]
+    verify = ""
+    try:
+        back = rt.rag.search(probe, top_k=1)
+        if back and back[0]["source"] == Path(path).name:
+            verify = "入库后检索验证: 通过"
+        else:
+            verify = (
+                "⚠️ 入库后检索验证未通过（写入成功但查不回来），"
+                "请重启服务后重试一次；若仍失败查看 web.log"
+            )
+    except Exception as e:
+        verify = f"⚠️ 入库后检索验证出错: {type(e).__name__}: {str(e)[:80]}"
+
     return (
         f"✅ 已入库\n"
         f"  文件: {Path(path).name}\n"
         f"  原文: {len(text)} 字符\n"
         f"  切片: {n} 段\n"
-        f"  知识库总量: {rt.rag.stats()['knowledge_chunks']} 段"
+        f"  知识库总量: {rt.rag.stats()['knowledge_chunks']} 段\n"
+        f"  {verify}"
     )
 
 

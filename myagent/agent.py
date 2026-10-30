@@ -9,6 +9,7 @@ Agent 核心：思考 → 调用工具 → 观察结果 → 再思考，直到�
 """
 
 import os
+import re
 from collections.abc import Callable
 
 from .checks import number_guard
@@ -17,6 +18,25 @@ from .llm import BaseLLM
 from .runtime import get_runtime
 from .skills import SkillStore
 from .tools import WORKSPACE, execute_tool, get_tool_specs
+
+# 知识库注入标记：[知识库·文件名] / 【知识库：文件名】 等变体。
+# 模型偶尔会把标记原样抄进回答，靠提示词管不住 7B，这里统一剥掉。
+_RAG_TAG_RE = re.compile(r"[\[【]\s*知识库\s*[·・:：\-]\s*[^\]】\n]{0,80}[\]】]\s*")
+# 注入格式里的「来源：xxx」整行 / 括号形式，同样不该出现在给用户的回答里
+_SRC_LINE_RE = re.compile(r"(?m)^[ \t]*来源[ \t]*[:：][^\n]*\n?")
+_SRC_INLINE_RE = re.compile(r"[（(][ \t]*来源[ \t]*[:：][^）)\n]{0,80}[）)][ \t]*")
+
+
+def scrubbed_rag_tags(text: str) -> str:
+    """去掉回答里的知识库注入标记与来源标注，不留重复标点、空行"""
+    if not text:
+        return text
+    out = _RAG_TAG_RE.sub("", text)
+    out = _SRC_LINE_RE.sub("", out)
+    out = _SRC_INLINE_RE.sub("", out)
+    out = re.sub(r"([，,、])\s*([，,、])", r"\1", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
 
 BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能自己动手办事。数据不出这台机器。
 
@@ -30,7 +50,9 @@ BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能
 例：
 - "1280*0.123 是多少" → 先调 calculator，再报结果
 - "今天几号" → 先调 now，再回答
-- "这份文档讲了什么" → 调 analyze_document
+- "知识库里 XX 讲了什么" → 上下文已经带了 [知识库] 片段就直接据此回答；
+  片段不够再调 search_knowledge 换个问法查一次
+- 用户刚给了具体路径、或刚在界面上传完文档，要"分析"它 → analyze_document
 
 ## 二、只有这三种情况可以不动手
 打招呼闲聊、解释通用概念、给建议或看法。除此之外一律先动手查，不要凭记忆答。
@@ -69,6 +91,14 @@ BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能
 9. 需要确认的工具被用户拒绝，就停下来说明，别换参数重试。
 10. 上下文出现「过往对话」块时，里面的名字、偏好、项目信息可以直接用，
    但不要复述回忆本身，直接回答当前问题。
+11. 上下文出现「来源：文件名」后跟一段正文时，那就是已入库文档的原文，可以直接用来回答。
+   此时绝不要向用户索要文件路径，也不要说"我无法访问该文档"——
+   用户刚入库的文档就在这些片段里。片段答不全时，换一组关键词再调一次
+   search_knowledge（用文档标题、章节名当关键词），仍没有才说知识库里没有。
+   回答里不要出现「来源：xxx」这类标注行，要提来源就用正常话说
+   「你入库的《XX》里写着…」。
+12. search_knowledge 返回"知识库是空的"时，先调 knowledge_stats 核对，
+   确实为 0 才让用户去入库，不要凭一次报错就下结论。
 
 ## 五、怎么说话
 - 中文，先说结论，再说依据。不复述原文，不说"根据检索结果""我将要…"这类话。
@@ -122,9 +152,15 @@ class Agent:
         if rt.rag and rt.rag.stats()["knowledge_chunks"]:
             try:
                 hits = rt.rag.search(query, top_k=5)
-                blocks += [f"[知识库] {h['text']}" for h in hits]
-            except Exception:
-                pass
+                # 带上来源文件名：用户刚入库一份文档后问「这个文档讲了什么」，
+                # 模型看到文件名才知道片段属于哪一份，否则容易当成无关内容忽略。
+                # 用「来源：x」而不是 [知识库·x] 这种方括号标记——标记被模型
+                # 顺手抄进正文会留下「，中提到的」这种语病。
+                blocks += [f"来源：{h['source']}\n{h['text']}" for h in hits]
+            except Exception as e:
+                # 以前这里静默吞掉，检索崩了用户只会看到「知识库里没有」。
+                # 至少要留痕，排查时 web.log 里能对上。
+                self._log(f"  ⚠️ 知识库检索出错: {type(e).__name__}: {str(e)[:120]}")
         if self.memory:
             try:
                 recalled = self.memory.recall(query)
@@ -135,7 +171,11 @@ class Agent:
                 pass
         if not blocks:
             return ""
-        return "以下是检索到的相关内容，回答时优先参考：\n\n" + "\n\n".join(blocks)
+        return (
+            "以下是刚从知识库/记忆里检索到的相关原文，可以直接作为回答依据：\n"
+            "（用户问「这个文档/刚才入库的文档」时指的就是这些片段，"
+            "不要向他索要文件路径）\n\n" + "\n\n".join(blocks)
+        )
 
     # 上下文里最多保留的消息条数（不含 system）。
     # 超出的旧轮次不丢弃内容——它们已经写进长期记忆向量库，需要时可被检索回来
@@ -242,6 +282,9 @@ class Agent:
 
                 final = content or "(Agent 没有给出回复)"
                 final = self._scrub_tainted_claim(final)
+                # 注入标记是给模型看的，不该出现在给用户的回答里。
+                # 靠提示词要求"别抄"对小模型不可靠，这里确定性地剥掉。
+                final = scrubbed_rag_tags(final)
                 # 抄错数字先打回重算一次：直接标注只能提示，重算才有机会真的答对
                 notes = self._number_notes(final, goal)
                 if notes and self._number_retry < 1 and step < self.max_steps:
