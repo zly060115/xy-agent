@@ -12,7 +12,8 @@
 | 安全文件读取 | 白名单目录、只读、禁止系统目录，越界直接拒绝 |
 | 人工确认 | 每次读本地文件都要你点头，Agent 不能私自读 |
 | 双模型后端 | 本地 Ollama / 云端 API，改配置即可切换 |
-| Gradio 网页 | 文档分析、对话、上传入库、知识库状态、风格设置 |
+| **模型自选** | 13 家厂商预设，网页点选 + 填自己的密钥 + 一键测试连接，热切换不重启 |
+| Gradio 网页 | 对话、文档分析、上传入库、知识库状态、模型选择、风格设置 |
 
 ### 文档分析怎么用
 
@@ -72,6 +73,7 @@ copy .env.example .env
 #   DATA_DIR            数据目录（记忆库/知识库/上传文件/工作区），
 #                       留空 = 用户主目录下 .xiaoman，建议放代码之外
 #   ALLOWED_FILE_DIRS   额外允许 Agent 读取的目录（数据目录会自动加入白名单）
+#   （模型不用在这里配，启动后到网页「模型」标签页点选即可）
 
 # 4. 启动
 .venv\Scripts\python.exe main.py          # 命令行
@@ -159,27 +161,67 @@ python main.py --ingest "C:\资料\产品手册.pdf"
 python main.py --list-files
 python main.py --stats
 python main.py --steps 25 "复杂任务"
+python main.py --models                        # 看有哪些厂商可选
+python main.py --set-model deepseek --key sk-xxxx   # 存下模型选择
 ```
 
-## 切换成云端 API
+## 选模型：界面点选，填自己的密钥
 
-改 `.env`：
+三个入口，优先级 **界面保存 > `.env` > 代码默认值**。
+
+**1）网页端（推荐，改完不用重启）**
+
+启动 `web.py` → 打开「模型」标签页：
+
+| 步骤 | 说明 |
+|---|---|
+| 选厂商 | 13 家预设（含本地 Ollama），切厂商时模型名、接口地址、视觉模型一起自动换 |
+| 填模型名 | 下拉里是常用值，**可以直接输入任意模型名**（厂商换代很快，预设会过期） |
+| 填密钥 | 本地模型不需要；云端模型留空则沿用上一次保存的那把 |
+| 测试连接 | 真发一次请求，报错会翻成中文（401 密钥错 / 404 模型名错 / 429 余额或限流 / 超时） |
+| 保存并启用 | 写入 `DATA_DIR/settings.json`，模型、Agent、读图组件同时热切换 |
+
+**2）命令行（服务器上没有浏览器时）**
+
+```bash
+python main.py --models                              # 列出所有厂商、常用模型、密钥申请地址
+python main.py --set-model deepseek --key sk-xxxx    # 存下来，下次启动生效
+python main.py --set-model ollama --model qwen2.5:7b # 切回本地
+python main.py --set-model custom --model my-llm \
+    --base-url https://gateway.example.com/v1 --key sk-xxxx
+```
+
+**3）`.env`（当作默认值）**
 
 ```ini
 BACKEND=api
 API_KEY=sk-xxxx
-BASE_URL=https://api.deepseek.com/v1
-MODEL=deepseek-chat
+BASE_URL=https://api.deepseek.com
+MODEL=deepseek-v4-flash
 ```
 
-代码不用动。常用 base_url：
+**预置厂商**（`myagent/providers.py`，都走 OpenAI 兼容协议，所以一套客户端通吃）：
 
-| 服务 | BASE_URL | MODEL |
+| 厂商 | 接口地址 | 常用模型（仅为默认值，可手填） |
 |---|---|---|
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-plus` |
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| 本地 Ollama | `http://localhost:11434` | `qwen2.5:7b` / `qwen2.5:14b` / `deepseek-r1:7b` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-flash` / `deepseek-v4-pro` |
+| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` / `qwen3.8-flash` / `qwen-long` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` / `glm-5.3-flash` / `glm-4.6` |
+| 月之暗面 Kimi | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` / `kimi-k3` / `kimi-k2.7-code` |
+| 字节豆包（方舟） | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-1-pro-260915` |
+| 腾讯混元 | `https://tokenhub.tencentcloudmaas.com/v1` | `hy3` / `hy4-preview` |
+| MiniMax | `https://api.minimaxi.com/v1` | `MiniMax-M3` |
+| 阶跃星辰 | `https://api.stepfun.com/v1` | `step-3.7-flash` |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` / `gpt-4o` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` 等「厂商/型号」 |
+| 自定义 | 自己填 | 自建 vLLM / LM Studio / 公司网关 |
+
+**密钥存在哪、安全吗**：存在 `DATA_DIR/settings.json`（默认 `~/.xiaoman/`），
+**明文**、只在本机、已在 `.gitignore` 里，不会跟着代码推到 GitHub；界面只显示掩码。
+为什么不明文加密：本地单用户工具加一层密码，最常见的结局是用户自己忘了密码、
+密钥找不回来。需要更严的话请用系统的密钥管理（或只填临时 key 用完就清除）。
 
 ## 加自己的工具
 
@@ -219,7 +261,9 @@ TOOLS["weather"] = {
 │   ├── rag.py         # ChromaDB 知识库
 │   ├── safe_reader.py # 安全文件读取
 │   ├── confirm.py     # 人工确认网关
-│   ├── llm.py         # 双模型后端
+│   ├── llm.py         # 模型后端（本地 Ollama / OpenAI 兼容）
+│   ├── providers.py   # 13 家厂商预设（接口地址 + 常用模型名）
+│   ├── settings.py    # 模型选择与密钥的保存/校验（存 DATA_DIR）
 │   ├── runtime.py     # 全局组件容器
 │   └── config.py
 └── kb_test/           # 测试资料（含 Agent 搭建方法论）
@@ -228,7 +272,8 @@ TOOLS["weather"] = {
 ├── chroma_db/         # 向量数据：知识库 + 对话记忆
 ├── uploads/           # 网页上传的原始文档
 ├── workspace/         # Agent 读写工作区
-└── skills/            # 按需加载的技能
+├── skills/            # 按需加载的技能
+└── settings.json      # 你选的模型与密钥（明文，仅本机）
 ```
 
 ## 已知限制

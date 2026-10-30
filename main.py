@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 from myagent.agent import Agent
+from myagent import providers, settings
 from myagent.config import config
 from myagent.confirm import build_gateway
 from myagent.llm import build_llm
@@ -89,13 +90,58 @@ def main():
     parser.add_argument("--ingest", help="解析入库一个文件")
     parser.add_argument("--list-files", action="store_true", help="列出可解析文件")
     parser.add_argument("--stats", action="store_true", help="查看知识库状态")
+    parser.add_argument("--models", action="store_true", help="列出可选的模型厂商")
+    parser.add_argument(
+        "--set-model",
+        metavar="厂商ID",
+        help="保存模型选择并退出，例如 --set-model deepseek --key sk-xxx",
+    )
+    parser.add_argument("--model", help="配合 --set-model 使用的模型名")
+    parser.add_argument("--key", help="API 密钥（本地 Ollama 不需要）")
+    parser.add_argument("--base-url", dest="base_url", help="接口地址，自定义厂商必填")
+    parser.add_argument("--vision-model", dest="vision_model", help="视觉模型名，可留空")
     args = parser.parse_args()
+
+    if args.models:
+        print("可选厂商（共 %d 家）：\n" % len(providers.all_providers()))
+        for p in providers.all_providers():
+            key_note = "无需密钥" if not p.need_key else f"密钥申请 {p.key_url}"
+            print(f"  {p.id:<12} {p.name}")
+            print(f"  {'':<12} 常用模型：{', '.join(p.models) or '（自行填写）'}")
+            print(f"  {'':<12} {key_note}\n")
+        print("用法示例：python main.py --set-model deepseek --key sk-xxxx")
+        return
+
+    if args.set_model:
+        pid = args.set_model.strip()
+        p = providers.get(pid)
+        model = args.model or (p.models[0] if p and p.models else "")
+        if not p:
+            print(f"❌ 没有叫 {pid} 的厂商，先跑 python main.py --models 看列表")
+            sys.exit(1)
+        base = args.base_url or p.base_url
+        ok, why = settings.validate(pid, model, args.key or "", base)
+        if not ok:
+            print(f"❌ {why}")
+            sys.exit(1)
+        path = settings.save(
+            config.data_dir, pid, model, args.key or "", base, args.vision_model or ""
+        )
+        print(f"✅ 已保存：{p.name} / {model}")
+        if p.need_key:
+            print(f"   密钥：{settings.mask(args.key)}")
+        print(f"   文件：{path}")
+        print("   下次启动（或网页端「模型」页刷新）即生效")
+        return
 
     try:
         llm, rag, reader, gateway = create_runtime()
     except Exception as e:
         print(f"❌ 初始化失败: {e}")
-        print("\n提示：确认 Ollama 服务已启动，或检查 .env 配置")
+        print("\n两条排查方向：")
+        print("  1. 用本地模型：确认 Ollama 已启动（ollama serve），并已 pull 对应模型")
+        print("  2. 用云端模型：python main.py --models 看厂商，再用 --set-model 配置密钥")
+        print("     网页端也可以：启动 web.py，打开「模型」标签页选择并测试连接")
         sys.exit(1)
 
     if args.steps:

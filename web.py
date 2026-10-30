@@ -29,7 +29,8 @@ from myagent.agent import Agent
 from myagent.confirm import ConfirmGateway
 from myagent.config import config
 from myagent.memory import ConversationMemory
-from myagent.llm import build_llm
+from myagent import providers, settings
+from myagent.llm import UnavailableLLM, build_llm, ping
 from myagent.rag import RAGStore, build_embed_fn
 from myagent.runtime import set_runtime
 from myagent.safe_reader import SafeFileReader
@@ -54,7 +55,28 @@ config.vision_max_images = int(
     os.getenv("MAX_VISION_IMAGES", config.vision_max_images) or config.vision_max_images
 )
 
-LLM = build_llm(config)
+# 只由 .env 决定的状态快照：用户在界面上点「清除配置」时回到这里
+ENV_BASELINE = {
+    "backend": config.backend,
+    "model": config.model,
+    "ollama_host": config.ollama_host,
+    "api_key": config.api_key,
+    "base_url": config.base_url,
+    "vision_model": config.vision_model,
+    "provider": "ollama" if config.backend == "ollama" else providers.guess_id(config.base_url),
+}
+
+# 界面里保存过的模型选择优先于 .env：界面是显式动作，.env 可能早就过期
+if not settings.apply_to(config):
+    config.provider = ENV_BASELINE["provider"]
+
+try:
+    LLM = build_llm(config)
+    STARTUP_ERR = ""
+except Exception as e:  # 配置不全也要能打开网页，否则用户连改配置的入口都没有
+    LLM = UnavailableLLM(str(e))
+    STARTUP_ERR = str(e)
+
 RAG = RAGStore(embed_fn=build_embed_fn())
 READER = SafeFileReader(
     vision=LLM,
@@ -280,6 +302,165 @@ def save_style(style: str):
     return "✅ 风格已应用（仅影响措辞，不影响工具调用）"
 
 
+# ---------- 模型选择 ----------
+
+def _status_md() -> str:
+    head = f"**当前模型**：`{LLM.name}`\n\n"
+    body = settings.describe(config).replace("\n", "  \n")
+    warn = ""
+    if STARTUP_ERR:
+        warn = f"\n\n⚠️ 启动时配置有问题：{STARTUP_ERR}"
+    if config.backend == "api":
+        warn += f"\n\n密钥保存在 `{config.settings_file}`（仅本机，不进代码库）"
+    return head + body + warn
+
+
+def model_status_fn():
+    return _status_md()
+
+
+def on_provider_change(pid: str):
+    """切厂商：把模型名、接口地址、视觉模型、说明一起换掉"""
+    p = providers.get(pid)
+    if p is None:
+        return gr.update(), gr.update(), gr.update(), gr.update()
+    models = [(m, m) for m in p.models]
+    note = f"**{p.name}**"
+    if p.note:
+        note += "\n\n" + p.note
+    if p.key_url:
+        note += f"\n\n密钥申请：{p.key_url}"
+    return (
+        gr.update(choices=models, value=(p.models[0] if p.models else "")),
+        gr.update(value=p.base_url),
+        gr.update(value=note),
+        gr.update(value=(p.vision_models[0] if p.vision_models else "")),
+    )
+
+
+def _tmp_cfg(pid: str, model: str, key: str, base_url: str, vision: str):
+    """用界面上填的值造一份临时配置，用于测试连接（不落盘）"""
+    from types import SimpleNamespace
+
+    p = providers.get(pid)
+    if p and p.kind == "local":
+        return SimpleNamespace(
+            backend="ollama",
+            provider=pid,
+            model=model.strip() or p.models[0],
+            ollama_host=(base_url or "").strip() or p.base_url,
+            num_ctx=config.num_ctx,
+            vision_model=(vision or "").strip(),
+            api_key="",
+            base_url="",
+        )
+    return SimpleNamespace(
+        backend="api",
+        provider=pid,
+        model=(model or "").strip(),
+        api_key=(key or "").strip(),
+        base_url=(base_url or "").strip() or (p.base_url if p else ""),
+        vision_model=(vision or "").strip(),
+        ollama_host="",
+    )
+
+
+def _effective_key(pid: str, key: str) -> str:
+    """界面留空时沿用已保存的那把密钥。
+
+    换模型（同一家）不该逼用户重新粘一次密钥；但换厂商必须重填，
+    否则会把上一家的密钥发到新厂商，报错还会指向错的厂商。
+    """
+    k = (key or "").strip()
+    if k:
+        return k
+    if pid == getattr(config, "provider", "") and config.backend == "api":
+        return (config.api_key or "").strip()
+    return ""
+
+
+def test_model_fn(pid: str, model: str, key: str, base_url: str, vision: str):
+    key = _effective_key(pid, key)
+    ok, why = settings.validate(pid, model, key, base_url)
+    if not ok:
+        return f"❌ {why}"
+    try:
+        candidate = build_llm(_tmp_cfg(pid, model, key, base_url, vision))
+    except Exception as e:
+        return f"❌ 配置有误：{e}"
+    ok, msg = ping(candidate)
+    return ("✅ " if ok else "❌ ") + msg
+
+
+def _activate(new_llm) -> None:
+    """把新模型接到正在运行的所有组件上，不用重启服务"""
+    global LLM
+    LLM = new_llm
+    AGENT.llm = new_llm
+    READER.vision = new_llm
+    set_runtime(llm=new_llm, reader=READER)
+    AGENT.reset()
+
+
+def apply_model_fn(pid: str, model: str, key: str, base_url: str, vision: str):
+    global STARTUP_ERR
+    key = _effective_key(pid, key)
+    ok, why = settings.validate(pid, model, key, base_url)
+    if not ok:
+        return f"❌ {why}"
+
+    old = settings.load(config.data_dir)  # 用于失败回滚
+
+    try:
+        settings.save(config.data_dir, pid, model, key, base_url, vision)
+        if not settings.apply_to(config):
+            raise RuntimeError("设置写入后读取失败，请检查数据目录权限")
+        new_llm = build_llm(config)
+    except Exception as e:
+        _rollback(old)
+        return f"❌ 没有切换，当前仍是 {LLM.name}：{e}"
+
+    _activate(new_llm)
+    STARTUP_ERR = ""
+    return f"✅ 已切换到 `{new_llm.name}`，下一次提问就生效（对话上下文已清空）\n\n" + _status_md()
+
+
+def _rollback(old: dict) -> None:
+    """保存失败时回到上一份设置，避免"文件写了一半、内存里还是旧的"这种半死状态"""
+    if old:
+        settings.save(
+            config.data_dir,
+            old.get("provider", ""),
+            old.get("model", ""),
+            old.get("api_key", ""),
+            old.get("base_url", ""),
+            old.get("vision_model", ""),
+        )
+    else:
+        settings.clear(config.data_dir)
+    try:
+        settings.apply_to(config)
+        _activate(build_llm(config))
+    except Exception:
+        pass
+
+
+def clear_model_fn():
+    """清除界面保存的配置，回到 .env / 默认值"""
+    removed = settings.clear(config.data_dir)
+    for k, v in ENV_BASELINE.items():
+        setattr(config, k, v)
+    try:
+        _activate(build_llm(config))
+        note = "✅ 已清除界面配置，回到 .env 里的设置"
+    except Exception as e:
+        _activate(UnavailableLLM(str(e)))
+        note = f"配置已清除，但 .env 里的设置也不能用：{e}"
+    if not removed:
+        note = "本来就没有保存过界面配置，已按 .env 重新加载"
+    return note + "\n\n" + _status_md()
+
+
 def reset_chat():
     AGENT.reset()
     return [], "上下文已清空"
@@ -289,6 +470,9 @@ def reset_chat():
 
 with gr.Blocks(title="小满 Agent") as demo:
     gr.Markdown("# 小满 Agent\n能自己动手办事的本地助手。可以读文档、查知识库、写文件。")
+    gr.Markdown(
+        f"当前模型：`{LLM.name}`　·　换模型去「模型」标签页（本地 Ollama 免费，也可填自己的云端密钥）"
+    )
 
     with gr.Tabs():
         with gr.Tab("对话"):
@@ -355,6 +539,85 @@ with gr.Blocks(title="小满 Agent") as demo:
             stats_out = gr.Textbox(label="状态", lines=6)
             stats_btn.click(stats_fn, None, stats_out)
 
+        with gr.Tab("模型"):
+            gr.Markdown(
+                "**换模型不用改代码、不用重启。** 选一家厂商 → 填上你自己的密钥 → "
+                "先点「测试连接」确认通 → 再点「保存并启用」。\n\n"
+                "密钥保存在本地数据目录的 `settings.json` 里（不进代码库、不会被推到 GitHub），"
+                "界面只显示掩码。本地 Ollama 不需要密钥。"
+            )
+            model_now = gr.Markdown(_status_md())
+
+            prov_dd = gr.Dropdown(
+                label="模型厂商",
+                choices=providers.choices(),
+                value=config.provider if providers.get(config.provider) else "ollama",
+            )
+            prov_note = gr.Markdown(
+                (providers.get(config.provider) or providers.get("ollama")).note
+            )
+
+            model_dd = gr.Dropdown(
+                label="模型名（下拉里是常用值，也可以直接输入任意名字）",
+                choices=[
+                    (m, m)
+                    for m in (
+                        (providers.get(config.provider) or providers.get("ollama")).models
+                    )
+                ],
+                value=config.model,
+                allow_custom_value=True,
+            )
+
+            with gr.Row():
+                key_tb = gr.Textbox(
+                    label="API 密钥",
+                    type="password",
+                    placeholder=(
+                        f"已保存：{settings.mask(config.api_key)}（留空则沿用）"
+                        if config.api_key
+                        else "本地模型不需要；云端模型粘贴你自己的密钥"
+                    ),
+                    scale=3,
+                )
+                url_tb = gr.Textbox(
+                    label="接口地址",
+                    value=config.base_url if config.backend == "api" else config.ollama_host,
+                    scale=3,
+                )
+
+            vis_tb = gr.Textbox(
+                label="视觉模型（可留空 = 只用 OCR 读图里的文字）",
+                value=config.vision_model,
+                placeholder="例如 glm-5.3-flash；留空则不做图像理解",
+            )
+
+            with gr.Row():
+                test_btn = gr.Button("测试连接")
+                apply_btn = gr.Button("保存并启用", variant="primary")
+                clear_btn = gr.Button("清除配置")
+
+            model_out = gr.Markdown()
+
+            prov_dd.change(
+                on_provider_change,
+                prov_dd,
+                [model_dd, url_tb, prov_note, vis_tb],
+            )
+            test_btn.click(
+                test_model_fn,
+                [prov_dd, model_dd, key_tb, url_tb, vis_tb],
+                model_out,
+            )
+            apply_btn.click(
+                apply_model_fn,
+                [prov_dd, model_dd, key_tb, url_tb, vis_tb],
+                model_out,
+            ).then(model_status_fn, None, model_now)
+            clear_btn.click(clear_model_fn, None, model_out).then(
+                model_status_fn, None, model_now
+            )
+
         with gr.Tab("风格"):
             gr.Markdown(
                 "设置回复风格。注意：风格只影响措辞语气，"
@@ -370,6 +633,7 @@ with gr.Blocks(title="小满 Agent") as demo:
             style_btn.click(save_style, style_box, style_out)
 
     demo.load(stats_fn, None, stats_out)
+    demo.load(model_status_fn, None, model_now)
 
 
 if __name__ == "__main__":

@@ -324,8 +324,8 @@ class OllamaLLM(BaseLLM):
 
 class OpenAICompatLLM(BaseLLM):
     """
-    任意 OpenAI 兼容接口：OpenAI / DeepSeek / 通义 / 智谱 / Moonshot 等
-    以后要接 API，只要在 config.py 里切到这一档并填 base_url + key + model
+    任意 OpenAI 兼容接口：OpenAI / DeepSeek / 通义 / 智谱 / Kimi 等
+    厂商的接口地址在 myagent/providers.py 里预设，界面上选一家即可
     """
 
     def __init__(
@@ -334,20 +334,24 @@ class OpenAICompatLLM(BaseLLM):
         api_key: str,
         base_url: str = "https://api.openai.com/v1",
         vision_model: str = "",
+        provider_name: str = "api",
     ):
         from openai import OpenAI
 
-        self._cli = OpenAI(api_key=api_key, base_url=base_url)
+        # 超时给足：长文档单次请求要几十秒，默认 10 分钟太长，
+        # 但 60 秒会把慢模型误判成失败，折中 180 秒并只重试一次
+        self._cli = OpenAI(api_key=api_key, base_url=base_url, timeout=180, max_retries=1)
         self._model = model
         self._vision_model = (vision_model or "").strip()
+        self._provider = (provider_name or "api").strip()
 
     @property
     def name(self) -> str:
-        return f"api/{self._model}"
+        return f"{self._provider}/{self._model}"
 
     @property
     def vision_name(self) -> str:
-        return f"api/{self._vision_model}" if self._vision_model else ""
+        return f"{self._provider}/{self._vision_model}" if self._vision_model else ""
 
     def vision_chat(
         self,
@@ -402,7 +406,17 @@ class OpenAICompatLLM(BaseLLM):
             if "num_predict" in options:
                 kwargs["max_tokens"] = options["num_predict"]
 
-        resp = self._cli.chat.completions.create(**kwargs)
+        try:
+            resp = self._cli.chat.completions.create(**kwargs)
+        except Exception as e:
+            # 部分厂商的推理模型不接受 temperature（如把采样参数固定死），
+            # 报错里点名了才退一步去掉重试，不能吞掉真正的鉴权/余额错误
+            msg = str(e).lower()
+            if "temperature" in msg and "temperature" in kwargs:
+                kwargs.pop("temperature", None)
+                resp = self._cli.chat.completions.create(**kwargs)
+            else:
+                raise
         msg = resp.choices[0].message
         tool_calls = []
         for tc in msg.tool_calls or []:
@@ -415,7 +429,37 @@ class OpenAICompatLLM(BaseLLM):
                     "arguments": json.loads(tc.function.arguments or "{}"),
                 }
             )
-        return {"content": msg.content, "tool_calls": tool_calls}
+        content = msg.content
+        # 与本地后端同样的毛病：模型把调用写成文本，标记会直接印给用户
+        if content and TOOL_TAG_RE.search(content):
+            content = TOOL_TAG_RE.sub("", content).strip() or None
+        return {"content": content, "tool_calls": tool_calls}
+
+
+class UnavailableLLM(BaseLLM):
+    """配置不可用时的占位后端。
+
+    典型场景：用户在界面上换了一家云端模型但还没填密钥就重启了服务。
+    直接抛异常会让网页起不来、连界面都打不开；
+    这里让程序正常启动，只在实际对话时给出可操作的提示。
+    """
+
+    def __init__(self, reason: str = ""):
+        self._reason = reason or "模型还没配置好"
+
+    @property
+    def name(self) -> str:
+        return "unavailable"
+
+    @property
+    def supports_tools(self) -> bool:
+        return False
+
+    def chat(self, messages, tools=None, options=None) -> dict:
+        raise RuntimeError(
+            f"{self._reason}。打开网页的「模型」标签页，选一家厂商、填上密钥，"
+            "点「保存并启用」即可。"
+        )
 
 
 def build_llm(cfg) -> BaseLLM:
@@ -428,12 +472,68 @@ def build_llm(cfg) -> BaseLLM:
             vision_model=getattr(cfg, "vision_model", ""),
         )
     if cfg.backend == "api":
-        if not cfg.api_key:
-            raise ValueError("使用 api 后端必须配置 api_key")
+        from . import providers
+
+        pid = getattr(cfg, "provider", "") or ""
+        p = providers.get(pid)
+        base_url = (getattr(cfg, "base_url", "") or "").strip() or (p.base_url if p else "")
+        key = (getattr(cfg, "api_key", "") or "").strip()
+        if not key:
+            where = f"，可以在 {p.key_url} 申请" if (p and p.key_url) else ""
+            raise ValueError(f"{providers.label(pid)} 需要 API 密钥{where}")
+        if not base_url:
+            raise ValueError(f"{providers.label(pid)} 缺少接口地址（base_url）")
         return OpenAICompatLLM(
             model=cfg.model,
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
+            api_key=key,
+            base_url=base_url,
             vision_model=getattr(cfg, "vision_model", ""),
+            provider_name=pid or "api",
         )
     raise ValueError(f"未知后端: {cfg.backend}")
+
+
+def ping(llm: BaseLLM, timeout_note: str = "") -> tuple[bool, str]:
+    """发一次最小请求，确认模型真的能用。
+
+    给界面上的「测试连接」用。只判断"能不能拿到回复"，
+    不评判回答质量——那是评测脚本的事。
+    """
+    import time
+
+    started = time.time()
+    try:
+        out = llm.chat(
+            [
+                {"role": "system", "content": "只回答一个字，不要解释。"},
+                {"role": "user", "content": "在吗"},
+            ],
+            options={"temperature": 0, "num_predict": 16},
+        )
+    except Exception as e:  # noqa: BLE001 - 任何异常都要变成人能看懂的话
+        return False, _explain(e)
+    cost = time.time() - started
+    text = (out.get("content") or "").strip()
+    if not text:
+        return False, f"连上了，但模型没有返回文字（耗时 {cost:.1f}s）。换个模型名再试。"
+    return True, f"连通正常（{cost:.1f}s）：{text[:30]}"
+
+
+def _explain(e: Exception) -> str:
+    """把常见报错翻成能照着修的中文"""
+    text = str(e)
+    low = text.lower()
+    if "401" in text or "unauthorized" in low or "invalid api key" in low or "invalid_api_key" in low:
+        return "密钥被拒绝（401）。检查是否复制完整、是否和所选厂商对得上。"
+    if "403" in text or "permission" in low:
+        return "密钥没有该模型的权限（403）。确认账号已开通这个模型。"
+    if "404" in text or "model_not_found" in low or "does not exist" in low:
+        return f"接口地址或模型名不对（404）。确认接口地址写到 /v1，模型名照厂商文档填。原始信息：{text[:120]}"
+    if "429" in text or "rate limit" in low:
+        return "被限流或余额不足（429）。稍后重试，或检查账户余额。"
+    if "timeout" in low or "timed out" in low:
+        return "连接超时。可能是网络不通，或该厂商在境内需要代理。"
+    if "connection" in low or "resolve" in low:
+        return f"连不上这个地址，检查接口地址是否写错、网络是否可达。原始信息：{text[:120]}"
+    return f"调用失败：{text[:200]}"
+

@@ -29,6 +29,9 @@ class Config:
     # ---- 后端选择：ollama（本地） 或 api（云端） ----
     backend: str = "ollama"
 
+    # ---- 厂商（对应 myagent/providers.py 里的 id，界面选择后写入） ----
+    provider: str = "ollama"
+
     # ---- 本地 Ollama ----
     model: str = "qwen2.5:7b"          # 推荐 7b：8G 显存刚好，工具调用稳
     ollama_host: str = "http://localhost:11434"
@@ -78,5 +81,21 @@ class Config:
         """按需加载的技能目录：{DATA_DIR}/skills/<名字>/SKILL.md"""
         return self.data_dir / "skills"
 
+    @property
+    def settings_file(self) -> Path:
+        """用户选择的模型与密钥（界面保存到这里，不进代码库）"""
+        return self.data_dir / "settings.json"
+
 
 config = Config()
+
+# 界面里保存过的模型选择优先于 .env。
+# 放在最后执行：任何入口（main.py / web.py）import 配置时都自动生效。
+try:
+    from .settings import apply_to as _apply_settings
+
+    _apply_settings(config)
+except Exception:
+    # 设置文件损坏或首次运行，用默认值启动，不能让程序起不来
+    pass
+

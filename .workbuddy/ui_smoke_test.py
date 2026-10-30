@@ -1,0 +1,87 @@
+"""
+网页端冒烟测试：确认「模型」标签页真的能构起来、按钮逻辑真的接上了
+
+只测能确定性判断的事：
+- Gradio 界面能构建（构建失败等于用户打开就是一片报错）
+- 切厂商时模型名 / 接口地址 / 视觉模型是否一起换
+- 保存后内存里的模型、Agent、读图组件是否同时切过去（漏一个就是"看起来切了实际没切"）
+- 清除配置能否回到 .env
+
+全程在临时数据目录里跑，不碰真实的 ~/.xiaoman。
+"""
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.stdout.reconfigure(encoding="utf-8")
+
+# 必须在 import web 之前设好：config 在导入时就会读 DATA_DIR
+_TMP = tempfile.mkdtemp(prefix="xiaoman_ui_")
+os.environ["DATA_DIR"] = _TMP
+
+import web  # noqa: E402
+
+passed = 0
+failed = 0
+
+
+def check(name: str, cond: bool, detail=""):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  ✅ {name}")
+    else:
+        failed += 1
+        print(f"  ❌ {name}  {detail}")
+
+
+print("=== 1. 界面构建 ===")
+check("Blocks 构建成功", web.demo is not None)
+check("启动时用的是本地模型", web.LLM.name.startswith("ollama/"), web.LLM.name)
+check("没有残留的启动错误", web.STARTUP_ERR == "", web.STARTUP_ERR)
+
+print("=== 2. 切厂商联动 ===")
+up = web.on_provider_change("deepseek")
+check("返回 4 个组件更新", len(up) == 4, len(up))
+check("接口地址换成 DeepSeek", "api.deepseek.com" in (up[1].get("value") or ""), up[1])
+check("模型列表非空", len(up[0].get("choices") or []) > 0)
+check("说明里带密钥申请地址", "platform.deepseek.com" in (up[2].get("value") or ""))
+
+up = web.on_provider_change("zhipu")
+check("智谱自带视觉模型", bool(up[3].get("value")), up[3].get("value"))
+
+up = web.on_provider_change("ollama")
+check("切回本地时视觉模型是 qwen2.5vl", "qwen2.5vl" in (up[3].get("value") or ""), up[3])
+
+print("=== 3. 保存前的拦截 ===")
+msg = web.test_model_fn("deepseek", "deepseek-v4-flash", "", "", "")
+check("没密钥时给出中文原因", msg.startswith("❌") and "密钥" in msg, msg)
+msg = web.test_model_fn("custom", "my-model", "sk-x", "", "")
+check("自定义没地址被拦", msg.startswith("❌") and "接口地址" in msg, msg)
+
+print("=== 4. 保存并热切换 ===")
+msg = web.apply_model_fn("deepseek", "deepseek-v4-flash", "sk-ui-test-4321", "", "")
+check("提示切换成功", msg.startswith("✅"), msg.splitlines()[0] if msg else "")
+check("全局模型已换", web.LLM.name == "deepseek/deepseek-v4-flash", web.LLM.name)
+check("Agent 用的是新模型", web.AGENT.llm.name == web.LLM.name, web.AGENT.llm.name)
+check("读图组件也换了", web.READER.vision.name == web.LLM.name, web.READER.vision.name)
+check(
+    "设置文件落在临时数据目录",
+    (Path(_TMP) / "settings.json").exists(),
+    _TMP,
+)
+check("状态文字里密钥是掩码", "sk-u" in web.model_status_fn() and "4321" in web.model_status_fn())
+check("状态文字不含完整密钥", "sk-ui-test-4321" not in web.model_status_fn())
+
+print("=== 5. 清除配置 ===")
+msg = web.clear_model_fn()
+check("提示清除成功", msg.startswith("✅"), msg.splitlines()[0] if msg else "")
+check("回到 .env 的本地模型", web.LLM.name.startswith("ollama/"), web.LLM.name)
+check("设置文件已删除", not (Path(_TMP) / "settings.json").exists())
+
+print(f"\n通过 {passed} 项，失败 {failed} 项")
+sys.exit(0 if failed == 0 else 1)
