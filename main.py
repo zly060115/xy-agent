@@ -58,6 +58,12 @@ def create_runtime():
         max_images=config.max_images,
         vision_max_images=config.vision_max_images,
     )
+    # 数据目录（记忆库/上传/工作区）自动进白名单，开源用户零配置可用
+    config.uploads_dir.mkdir(parents=True, exist_ok=True)
+    for d in (config.uploads_dir, config.workspace_dir, config.data_dir):
+        d.mkdir(parents=True, exist_ok=True)
+        if d.resolve() not in reader.allowed_dirs:
+            reader.allowed_dirs.append(d.resolve())
     gateway = build_gateway()
 
     set_runtime(llm=llm, rag=rag, reader=reader, gateway=gateway)
