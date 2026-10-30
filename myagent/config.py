@@ -3,6 +3,7 @@
 # 以后接 API ↘ backend = "api"，再填下面三项
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -80,6 +81,33 @@ class Config:
     def skills_dir(self) -> Path:
         """按需加载的技能目录：{DATA_DIR}/skills/<名字>/SKILL.md"""
         return self.data_dir / "skills"
+
+    @property
+    def write_dirs(self) -> list[Path]:
+        """除工作区之外，Agent 还能写的目录。
+
+        用户说「把文档放我桌面」时，就该真的落到桌面，而不是塞进工作区
+        再让他自己去翻。默认给桌面 / 文档 / 下载三个用户自己的目录，
+        系统目录和程序目录永远不在此列（写入前还会再拦一道）。
+        要改就设 ALLOWED_WRITE_DIRS，多个用 ; 分隔。
+        """
+        env = (os.getenv("ALLOWED_WRITE_DIRS") or "").strip()
+        if env:
+            raw = [Path(x.strip()) for x in re.split(r"[;]", env) if x.strip()]
+        else:
+            home = Path.home()
+            raw = [home / "Desktop", home / "Documents", home / "Downloads"]
+        out: list[Path] = []
+        for p in raw:
+            try:
+                p = p.expanduser()
+                if p.exists() and p.is_dir():
+                    r = p.resolve()
+                    if r not in out:
+                        out.append(r)
+            except OSError:
+                continue
+        return out
 
     @property
     def settings_file(self) -> Path:

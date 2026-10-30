@@ -131,11 +131,14 @@ class ConfirmGateway:
     # ---------- 回调交互（Web 用） ----------
 
     def _ask_callback(self, req: PendingRequest) -> bool:
-        if self.on_request:
-            try:
-                self.on_request(req)
-            except Exception:
-                return False
+        if not self.on_request:
+            # 没有接确认弹窗（网页会话里没做确认界面）时立刻拒绝。
+            # 以前这里会死等 timeout（120 秒），用户只看到转圈，最后才发现被拒。
+            return False
+        try:
+            self.on_request(req)
+        except Exception:
+            return False
         # 等待前端 approve/deny，超时视为拒绝
         return req.wait(self.timeout)
 

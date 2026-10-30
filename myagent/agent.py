@@ -61,8 +61,11 @@ BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能
 - 看 / 总结 / 提炼用户授权目录里的文档（pdf/docx/md）或一张图片 → analyze_document（绝对路径）
 - 把文档存进知识库 → ingest_local_file
 - 找 / 读用户授权目录里的文件 → list_local_files / read_local_file（会要用户确认）
-- 工作区里的 txt/md 文件：看内容用 read_file，写用 write_file，列目录用 list_files
-  （工作区 {workspace}，免授权）
+- 工作区里的 txt/md 文件：看内容用 read_file，列目录用 list_files（工作区 {workspace}，免授权）
+- 写 / 生成文档 → write_file，支持 .txt/.md/.docx
+  用户说"放到我桌面""存到文档里"时，直接把绝对路径传给 write_file：
+  可写目录 {write_dirs}
+  不要先说"我只能写在规定目录"，也不要写完留工作区让用户自己去拷
 - 查知识库有多少内容 → knowledge_stats
 
 **注意工具边界**：analyze_document 只处理授权目录里的文档和图片，不能读工作区文件；
@@ -99,6 +102,11 @@ BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能
    「你入库的《XX》里写着…」。
 12. search_knowledge 返回"知识库是空的"时，先调 knowledge_stats 核对，
    确实为 0 才让用户去入库，不要凭一次报错就下结论。
+13. 用户让你"在我桌面写一个文档""存到我文档里"这类指定位置的请求，
+   直接调 write_file 传绝对路径写过去，写完把完整路径回报给用户。
+   不许回答说"我只能写在规定目录"，也不许只在工作区建一个让用户自己搬。
+   真被拒绝（目录不在可写范围 / 扩展名不允许）时，原样说清原因和可写范围，
+   不要换个位置偷偷写。
 
 ## 五、怎么说话
 - 中文，先说结论，再说依据。不复述原文，不说"根据检索结果""我将要…"这类话。
@@ -131,9 +139,16 @@ class Agent:
         self._loaded_skills: set[str] = set()
         # 数字抄错的打回次数，每轮重置，最多一次，防止来回打转
         self._number_retry = 0
+        # 本轮是否真的写成功过文件（write_file 拿到 ✅ 才算）。
+        # 7B 会把没做的事说成做完了，光靠提示词管不住，得用工具结果兜底。
+        self._write_ok = False
+        self._write_retry = 0
 
     def _build_system(self) -> str:
-        prompt = BASE_PROMPT.format(workspace=WORKSPACE)
+        prompt = BASE_PROMPT.format(
+            workspace=WORKSPACE,
+            write_dirs="；".join(str(d) for d in config.write_dirs),
+        )
         if self.style_prompt:
             prompt += (
                 "\n\n表达风格要求（只影响你的措辞和语气，"
@@ -161,7 +176,9 @@ class Agent:
                 # 以前这里静默吞掉，检索崩了用户只会看到「知识库里没有」。
                 # 至少要留痕，排查时 web.log 里能对上。
                 self._log(f"  ⚠️ 知识库检索出错: {type(e).__name__}: {str(e)[:120]}")
-        if self.memory:
+        if self.memory and not self._goal_wants_write(query):
+            # 写文件的请求不注入旧对话。写入结果由文件系统说话，历史里
+            # 那些「已创建 xx.md」只会误导 7B 以为这事已经办过，直接照抄作答。
             try:
                 recalled = self.memory.recall(query)
                 if recalled:
@@ -243,6 +260,8 @@ class Agent:
         user_content = goal
         self._tainted = []
         self._number_retry = 0
+        self._write_ok = False
+        self._write_retry = 0
         self._apply_skills(goal)
 
         # 自动 RAG 注入
@@ -280,6 +299,31 @@ class Agent:
                     self._log("  ↻ 检测到「只说不做」，已打回要求真实执行")
                     continue
 
+                # 第二道：把「已经写好了」当成事实说出来，但这一轮根本没写成功过。
+                # 用户的真实遭遇就是这样——回答"已创建 C:\...\x.md"，桌面啥也没有，
+                # 这句话还会被存进长期记忆，之后每轮都被当成事实复述。
+                if (
+                    self._write_retry < 1
+                    and step < self.max_steps
+                    and not self._write_ok
+                    and self._claims_write(content or "")
+                    and self._goal_wants_write(goal)
+                ):
+                    self._write_retry += 1
+                    self.messages.append({"role": "assistant", "content": content or ""})
+                    self.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "你说了文件已创建/已写入，但这一轮你并没有调用 write_file，"
+                                "文件实际上不存在。现在立刻调用 write_file 把内容写进去，"
+                                "路径照用户要求的位置传绝对路径；写完再把结果告诉用户。"
+                            ),
+                        }
+                    )
+                    self._log("  ↻ 检测到「声称已写但没写」，已打回要求真实写入")
+                    continue
+
                 final = content or "(Agent 没有给出回复)"
                 final = self._scrub_tainted_claim(final)
                 # 注入标记是给模型看的，不该出现在给用户的回答里。
@@ -304,9 +348,18 @@ class Agent:
                     self._log("  ↻ 检测到数字抄错，已打回重算")
                     continue
                 final = self._guard_numbers(final, goal)
+                # 打回一次还在说"已写入"，说明它不打算动手了。
+                # 这时不能把假话原样交给用户，也不能存进记忆——
+                # 存进去以后每轮提问都会把"我已在桌面创建文件"当事实复述。
+                fake_write = self._claims_write(final) and not self._write_ok
+                if fake_write:
+                    final += (
+                        "\n\n⚠️ 补充说明：这次我并没有真正写成功，"
+                        "上面「已创建 / 已写入」的说法不成立，你的文件还没有生成。"
+                    )
                 self.messages.append({"role": "assistant", "content": final})
                 # 这一轮结束，写入长期记忆（重启不丢，以后相关问题能想起）
-                if self.memory:
+                if self.memory and not fake_write:
                     try:
                         self.memory.remember(goal, final)
                     except Exception:
@@ -331,6 +384,8 @@ class Agent:
                     self._log("  🛡 已拦截：写入内容源自外部资料里的指令")
                 else:
                     output = execute_tool(name, args, reason=content or "")
+                    if name == "write_file" and str(output).startswith("✅"):
+                        self._write_ok = True
                     if self._looks_injected(output):
                         self._tainted.append(output)
                 preview = output.replace("\n", " ")[:120]
@@ -350,6 +405,45 @@ class Agent:
         msg = f"⚠️ 达到最大步数 {self.max_steps}，任务可能未完全完成。请查看上方执行记录。"
         self._log(msg)
         return msg
+
+    # 说完事了的说法：「已创建文件」「已经写入 C:\...\x.md」「文件已保存」都算。
+    # 两种语序都要认，中英文混着写的也认。
+    _CLAIM_A_RE = re.compile(
+        r"(已|已经)[^。！？\n]{0,6}(创建|新建|写入|写好|生成|保存|导出|放到|存到|放到)"
+        r"[^。！？\n]{0,24}(文件|文档|表格|\.md|\.docx|\.txt|\.csv|桌面|目录)"
+    )
+    _CLAIM_B_RE = re.compile(
+        r"(文件|文档|表格)[^。！？\n]{0,8}(已|已经)[^。！？\n]{0,4}"
+        r"(创建|新建|写入|写好|生成|保存|导出)"
+    )
+
+    @classmethod
+    def _claims_write(cls, text: str) -> bool:
+        """回答里有没有声称"文件已经写好了\""""
+        if not text:
+            return False
+        return bool(cls._CLAIM_A_RE.search(text) or cls._CLAIM_B_RE.search(text))
+
+    @staticmethod
+    def _goal_wants_write(goal: str) -> bool:
+        """这句话是不是在要求写文件。
+
+        只在"用户确实要写东西"时才追究谎报，避免「刚才那个文件在哪」
+        这类提问被误判成写请求、被迫重写一遍文件。
+        """
+        g = goal or ""
+        # 只认明确的"动手写"说法。单个"写"字太宽——"你上次写的文档说了什么"
+        # 也会命中，那种提问不能逼模型重写一遍文件。
+        phrases = (
+            "写一个", "写一份", "写个", "写份", "写一下", "写点", "帮我写", "给我写",
+            "撰写", "起草", "拟一份", "创建", "新建", "生成", "保存",
+            "存到", "存进", "放到", "导出", "整理成", "写到", "写在", "写进",
+        )
+        objs = (
+            "文件", "文档", "桌面", "文档夹", "文件夹", ".md", ".docx", ".txt",
+            ".csv", "表格", "报告", "word", "Word",
+        )
+        return any(p in g for p in phrases) and any(o in g for o in objs)
 
     @staticmethod
     def _looks_like_plan(text: str) -> bool:

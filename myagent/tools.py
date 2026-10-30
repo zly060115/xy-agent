@@ -7,6 +7,7 @@
 # - 本地文件读取走 SafeFileReader，严格白名单 + 只读
 
 import json
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -16,9 +17,13 @@ from .runtime import get_runtime
 # ---------- 会话工作区（Agent 可自由读写的沙盒） ----------
 # 放在项目目录下，用户能直接看到 Agent 产出的文件，不用去别处翻
 from .config import config
+from .safe_reader import FORBIDDEN_DIRS
 
 WORKSPACE = config.workspace_dir
 WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+# 允许写的扩展名。只放文档类，绝不放 .bat/.exe/.ps1/.vbs/.lnk 这类能被双击执行的
+WRITE_EXT = {".txt", ".md", ".markdown", ".docx", ".csv", ".json"}
 
 
 def _safe_path(p: str) -> Path:
@@ -27,6 +32,97 @@ def _safe_path(p: str) -> Path:
     if not str(target).startswith(str(WORKSPACE.resolve())):
         raise PermissionError(f"拒绝访问工作区之外的路径: {p}")
     return target
+
+
+def _nc(p: Path | str) -> str:
+    """路径归一化：Windows 下大小写不敏感，比较前统一"""
+    return os.path.normcase(str(Path(p)))
+
+
+def _write_roots() -> list[Path]:
+    """可写的根目录：工作区 + 用户目录（桌面/文档/下载 或 ALLOWED_WRITE_DIRS）"""
+    roots = [WORKSPACE.resolve()]
+    for d in config.write_dirs:
+        r = Path(d).resolve()
+        if all(_nc(r) != _nc(x) for x in roots):
+            roots.append(r)
+    return roots
+
+
+def _under(target: Path, root: Path) -> bool:
+    t, r = _nc(target), _nc(root)
+    return t == r or t.startswith(r + os.sep)
+
+
+def _write_blocker(target: Path) -> str | None:
+    """能不能写这个位置。None = 可以；否则返回中文原因，直接给用户看"""
+    low_parts = {part.lower() for part in target.parts}
+    for bad in FORBIDDEN_DIRS:
+        if bad in low_parts:
+            return f"系统/程序目录不允许写（{bad}）"
+    roots = _write_roots()
+    if not any(_under(target, r) for r in roots):
+        allow = "、".join(str(r) for r in roots)
+        return (
+            f"只能写这些目录：{allow}。"
+            f"要写到别的地方，把目录加进 .env 的 ALLOWED_WRITE_DIRS"
+        )
+    ext = target.suffix.lower()
+    if ext not in WRITE_EXT:
+        return (
+            f"只写文档类文件（{' '.join(sorted(WRITE_EXT))}），"
+            f"不写可执行文件或脚本（{ext or '无扩展名'}）"
+        )
+    return None
+
+
+def _where_label(target: Path) -> str:
+    """给用户一句位置说明：桌面 / 文档 / 下载 / 工作区"""
+    home = Path.home()
+    known = {
+        _nc(home / "Desktop"): "桌面",
+        _nc(home / "Documents"): "文档",
+        _nc(home / "Downloads"): "下载",
+        _nc(WORKSPACE): "会话工作区",
+    }
+    for root in _write_roots():
+        label = known.get(_nc(root))
+        if label and _under(target, root):
+            return f"（已放到{label}）"
+    return ""
+
+
+def _md_to_docx(content: str):
+    """把 Markdown 味的内容写成真正的 Word：标题认 #，列表认 -，其余当正文"""
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "宋体"
+    normal.font.size = Pt(11)
+    rpr = normal.element.get_or_add_rPr()
+    rpr.get_or_add_rFonts().set(qn("w:eastAsia"), "宋体")
+
+    def plain(s: str) -> str:
+        return s.replace("**", "").replace("__", "").replace("`", "").strip()
+
+    count = 0
+    for raw in content.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped in {"---", "***", "___"}:
+            continue
+        if stripped.startswith("#"):
+            level = min(len(stripped) - len(stripped.lstrip("#")), 3)
+            doc.add_heading(plain(stripped[level:]), level=level)
+        elif stripped.startswith(("- ", "* ", "+ ")):
+            doc.add_paragraph(plain(stripped[2:]), style="List Bullet")
+        else:
+            doc.add_paragraph(plain(stripped))
+        count += 1
+    return doc, count
 
 
 def _resolve_input_path(p: str) -> str:
@@ -98,12 +194,34 @@ def tool_read_file(path: str) -> str:
         return "无法读取：可能是二进制文件"
 
 
+def _resolve_write_path(p: str) -> Path:
+    """写入目标：绝对路径照用（桌面/文档/下载），相对路径放工作区"""
+    raw = Path(p.strip().strip('"').strip("'")).expanduser()
+    if raw.is_absolute():
+        return raw.resolve()
+    return (WORKSPACE / raw).resolve()
+
+
 def tool_write_file(path: str, content: str) -> str:
-    """在工作区里写文件，会自动创建父目录"""
-    f = _safe_path(path)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(content, encoding="utf-8")
-    return f"已写入 {f.relative_to(WORKSPACE)}（{len(content)} 字符）"
+    """写文件。工作区免授权；桌面/文档/下载等用户目录也能写，但只写文档类。"""
+    target = _resolve_write_path(path)
+    why = _write_blocker(target)
+    if why:
+        return f"❌ 没有写：{why}"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.suffix.lower() == ".docx":
+            doc, n = _md_to_docx(content)
+            doc.save(str(target))
+            detail = f"{n} 段正文"
+        else:
+            target.write_text(content, encoding="utf-8")
+            detail = f"{len(content)} 字符"
+    except PermissionError as e:
+        return f"❌ 没有写：目标文件被占用或没权限（{e}）"
+    except Exception as e:  # noqa: BLE001 - 落盘失败要原样告诉用户
+        return f"❌ 写入失败：{type(e).__name__}: {e}"
+    return f"✅ 已写入 {target}（{detail}）{_where_label(target)}"
 
 
 def tool_run_command(command: str) -> str:
@@ -395,11 +513,22 @@ TOOLS = {
         "fn": tool_write_file,
         "spec": {
             "name": "write_file",
-            "description": "在 Agent 会话工作区里创建或覆盖写入一个文本文件",
+            "description": (
+                "创建或覆盖写入一个文件，支持 .txt/.md/.docx/.csv/.json。"
+                "传相对路径就写到会话工作区；用户说「写到我桌面 / 文档 / 下载」时，"
+                "直接把下面的绝对路径当 path 传进来，不要先问用户要路径，"
+                "也不要写完留在工作区让用户自己去拷："
+                + "；".join(str(d) for d in _write_roots())
+                + "。写 .docx 会生成真正的 Word 文档，content 用 "
+                "# 标题 / - 列表 / 普通段落 的写法即可。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "文件相对路径"},
+                    "path": {
+                        "type": "string",
+                        "description": "文件路径：相对路径=工作区，绝对路径=用户目录",
+                    },
                     "content": {"type": "string", "description": "要写入的完整内容"},
                 },
                 "required": ["path", "content"],

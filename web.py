@@ -286,11 +286,13 @@ def analyze_fn(file_obj, also_ingest: bool):
 def stats_fn():
     s = RAG.stats()
     allowed = [str(d) for d in READER.allowed_dirs]
+    writable = [str(d) for d in [config.workspace_dir, *config.write_dirs]]
     return (
         f"知识库片段: {s['knowledge_chunks']}\n"
         f"记忆片段  : {s['memory_chunks']}\n"
         f"数据库路径: {s['db_path']}\n"
         f"可读目录  : {', '.join(allowed)}\n"
+        f"可写目录  : {', '.join(writable)}\n"
         f"支持格式  : {', '.join(READER.info()['allowed_ext'])}"
     )
 
