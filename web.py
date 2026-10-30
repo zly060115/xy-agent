@@ -724,4 +724,8 @@ if __name__ == "__main__":
         inbrowser=True,
         theme=gr.themes.Soft(),
         show_error=True,
+        # 底部只留 "built with Gradio"，藏掉「Use via API / 设置 / 运行历史」：
+        # 那个页面是给程序调用的接口文档，普通用户点进去只会看到一堆函数名。
+        # 端点本身照旧可用，用法见 README「HTTP API」一节。
+        footer_links=["gradio"],
     )
