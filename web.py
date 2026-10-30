@@ -718,14 +718,28 @@ with gr.Blocks(title="小满 Agent") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(
-        server_name=os.getenv("WEB_HOST", "127.0.0.1"),
-        server_port=int(os.getenv("WEB_PORT", 7860)),
-        inbrowser=True,
-        theme=gr.themes.Soft(),
-        show_error=True,
-        # 底部只留 "built with Gradio"，藏掉「Use via API / 设置 / 运行历史」：
-        # 那个页面是给程序调用的接口文档，普通用户点进去只会看到一堆函数名。
-        # 端点本身照旧可用，用法见 README「HTTP API」一节。
-        footer_links=["gradio"],
-    )
+    _port = int(os.getenv("WEB_PORT", 7860))
+    try:
+        demo.launch(
+            server_name=os.getenv("WEB_HOST", "127.0.0.1"),
+            server_port=_port,
+            inbrowser=True,
+            theme=gr.themes.Soft(),
+            show_error=True,
+            # 底部只留 "built with Gradio"，藏掉「Use via API / 设置 / 运行历史」：
+            # 那个页面是给程序调用的接口文档，普通用户点进去只会看到一堆函数名。
+            # 端点本身照旧可用，用法见 README「HTTP API」一节。
+            footer_links=["gradio"],
+        )
+    except OSError as e:
+        # 端口被占用时 gradio 抛的是英文堆栈，用户看不懂也找不到原因。
+        # 这里给一句能照着做的话，而不是让 Python 栈糊满窗口。
+        low = str(e).lower()
+        if "empty port" in low or "address already in use" in low or "10048" in low:
+            print()
+            print(f"[启动失败] 端口 {_port} 已被占用，网页起不来。")
+            print(f"  1) 如果小满已经在跑，直接打开 http://127.0.0.1:{_port} 即可")
+            print(f"  2) 要用别的端口：先执行 set WEB_PORT=7861，再重新启动")
+            print(f"  3) 想知道是谁占着：netstat -ano | findstr :{_port}")
+            raise SystemExit(2)
+        raise
