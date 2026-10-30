@@ -11,8 +11,11 @@ Agent 核心：思考 → 调用工具 → 观察结果 → 再思考，直到�
 import os
 from collections.abc import Callable
 
+from .checks import number_guard
+from .config import config
 from .llm import BaseLLM
 from .runtime import get_runtime
+from .skills import SkillStore
 from .tools import WORKSPACE, execute_tool, get_tool_specs
 
 BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能自己动手办事。数据不出这台机器。
@@ -93,6 +96,11 @@ class Agent:
         self.messages: list[dict] = [{"role": "system", "content": self._build_system()}]
         # 本轮任务里被判定"夹带指令"的外部资料原文（文件/网页/检索片段）
         self._tainted: list[str] = []
+        # skill 按需注入：同一份只注入一次，避免多轮对话里反复堆叠
+        self._skill_store: SkillStore | None = None
+        self._loaded_skills: set[str] = set()
+        # 数字抄错的打回次数，每轮重置，最多一次，防止来回打转
+        self._number_retry = 0
 
     def _build_system(self) -> str:
         prompt = BASE_PROMPT.format(workspace=WORKSPACE)
@@ -151,10 +159,51 @@ class Agent:
             self._log(f"  ✂️ 早期 {keep_from - 1} 条消息移出上下文（已存长期记忆）")
             del msgs[1:keep_from]
 
+    def _apply_skills(self, goal: str) -> None:
+        """按这句话挑一份相关 skill 注入 system prompt。
+
+        只注入命中的那一份，且同一份不重复注入：
+        7B 同时跟两份指令会把步骤套错，长上下文也会挤掉工具定义。
+        """
+        if self._skill_store is None:
+            self._skill_store = SkillStore(config.skills_dir)
+        try:
+            hits = self._skill_store.match(goal)
+        except Exception:
+            return
+        for skill in hits:
+            if skill.name in self._loaded_skills:
+                continue
+            self.messages[0]["content"] += "\n\n" + self._skill_store.render(skill)
+            self._loaded_skills.add(skill.name)
+            self._log(f"  🧩 已加载技能：{skill.name}")
+
+    def _number_notes(self, final: str, goal: str) -> list[str]:
+        """回答里的数字与工具结果只差一位时，返回提示行"""
+        try:
+            tool_text = "\n".join(
+                m.get("content") or "" for m in self.messages if m.get("role") == "tool"
+            )
+            return number_guard(final, [goal, tool_text])
+        except Exception:
+            return []
+
+    def _guard_numbers(self, final: str, goal: str) -> str:
+        """兜底：重算过一次仍然抄错，就在回答末尾如实标出来。
+
+        不直接改数字——擅自替换会让真错误更难发现，只标出矛盾让用户判断。
+        """
+        notes = self._number_notes(final, goal)
+        if not notes:
+            return final
+        return final + "\n\n" + "\n".join(notes)
+
     def run(self, goal: str, on_step: Callable[[str], None] | None = None) -> str:
         """执行一个目标，返回最终回复"""
         user_content = goal
         self._tainted = []
+        self._number_retry = 0
+        self._apply_skills(goal)
 
         # 自动 RAG 注入
         if self.use_rag:
@@ -193,6 +242,25 @@ class Agent:
 
                 final = content or "(Agent 没有给出回复)"
                 final = self._scrub_tainted_claim(final)
+                # 抄错数字先打回重算一次：直接标注只能提示，重算才有机会真的答对
+                notes = self._number_notes(final, goal)
+                if notes and self._number_retry < 1 and step < self.max_steps:
+                    self._number_retry += 1
+                    self.messages.append({"role": "assistant", "content": final})
+                    self.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "核对发现你复述的数字和工具返回的不一致：\n"
+                                + "\n".join(notes)
+                                + "\n请以工具返回的数值为准重新计算并给出最终答案，"
+                                "不要在脑子里算，需要算就再调一次 calculator。"
+                            ),
+                        }
+                    )
+                    self._log("  ↻ 检测到数字抄错，已打回重算")
+                    continue
+                final = self._guard_numbers(final, goal)
                 self.messages.append({"role": "assistant", "content": final})
                 # 这一轮结束，写入长期记忆（重启不丢，以后相关问题能想起）
                 if self.memory:

@@ -2,7 +2,36 @@
 # 本地 Ollama 和云端 API 共用同一套接口，切换只改 config.py
 
 from abc import ABC, abstractmethod
+import re
 from typing import Any
+
+# 模型把工具调用写成文本时的标记
+TOOL_TAG_RE = re.compile(r"</?tool_call[^>]*>", re.I)
+
+
+def _iter_json_objects(text: str):
+    """按大括号配对，逐个产出 (JSON 文本, 起点, 终点)
+
+    比正则可靠：arguments 里常有嵌套对象，正则的贪婪/非贪婪都会切错。
+    """
+    i = 0
+    while True:
+        start = text.find("{", i)
+        if start < 0:
+            return
+        depth = 0
+        for j in range(start, len(text)):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[start : j + 1], start, j + 1
+                    i = j + 1
+                    break
+        else:
+            # 没闭合，往后找下一个 {
+            i = start + 1
 
 
 class BaseLLM(ABC):
@@ -184,39 +213,82 @@ class OllamaLLM(BaseLLM):
             tool_calls.append({"id": f"call_{i}", "name": name, "arguments": args})
 
         content = msg.get("content") or None
-        if not tool_calls and tools:
-            rescued = self._rescue_json_tool_call(content)
+        if content:
+            # 模型偶尔把工具调用写成 <tool_call>{...}</tool_call> 的文本形式，
+            # 解析器只认走一半，残留的标记和 JSON 会直接印给用户。
+            # 这里先把标记剥掉，下面再从正文里把这坨调用捞出来。
+            content = TOOL_TAG_RE.sub("", content).strip() or None
+        if not tool_calls and tools and content:
+            rescued, leftover = self._rescue_json_tool_call(
+                content, allow_embedded=bool(TOOL_TAG_RE.search(msg.get("content") or ""))
+            )
             if rescued:
                 tool_calls = rescued
-                content = None
+                content = leftover or None
         return {"content": content, "tool_calls": tool_calls}
 
     @staticmethod
-    def _rescue_json_tool_call(content: str | None) -> list[dict] | None:
+    def _rescue_json_tool_call(
+        content: str | None, allow_embedded: bool = False
+    ) -> tuple[list[dict] | None, str]:
         """兜底：模型偶尔不按 tool_calls 字段返回，而是把工具调用
         以 JSON 文本写在 content 里（实测 qwen2.5 偶发）。
         识别出来转成正常的 tool_calls，否则这轮调用就白做了。
+
+        返回 (工具调用列表 或 None, 剥掉调用后的剩余文本)。
+        剩余文本要保留：模型有时前半句是说明、后半句才是调用，
+        整段丢掉会把有用的话一起吞了。
+
+        allow_embedded 只在原文本确实带 <tool_call> 标记时打开。
+        否则一段正文里恰好出现 {"name":..,"arguments":{..}} 就会被误当调用，
+        用户让我们解释一个 JSON 时尤其容易踩。
         """
         if not content:
-            return None
-        s = content.strip()
-        if not (s.startswith("{") and s.endswith("}")):
-            return None
-        try:
-            import json
+            return None, content or ""
+        import json
 
-            data = json.loads(s)
-        except Exception:
-            return None
+        text = content.strip()
+
+        # 纯 JSON 的老路径：整段就是一个调用
+        s = text
+        if s.startswith("{") and s.endswith("}"):
+            try:
+                data = json.loads(s)
+            except Exception:
+                data = None
+            call = OllamaLLM._as_tool_call(data)
+            if call:
+                return [call], ""
+
+        # 带标记时的老路径：从正文里挖出第一个能解析的 JSON 对象
+        if allow_embedded:
+            for obj, start, end in _iter_json_objects(text):
+                try:
+                    data = json.loads(obj)
+                except Exception:
+                    continue
+                call = OllamaLLM._as_tool_call(data)
+                if call:
+                    leftover = (text[:start] + text[end:]).strip()
+                    return [call], leftover
+
+        return None, content
+
+    @staticmethod
+    def _as_tool_call(data) -> dict | None:
+        """把解析出的 JSON 认成工具调用；不像就返回 None"""
         if not isinstance(data, dict):
             return None
-        name = data.get("name") or (data.get("function") or {}).get("name")
-        args = data.get("arguments") or (data.get("function") or {}).get("arguments")
+        fn = data.get("function") or {}
+        name = data.get("name") or (fn.get("name") if isinstance(fn, dict) else None)
+        args = data.get("arguments")
+        if args is None and isinstance(fn, dict):
+            args = fn.get("arguments")
         if not name or not isinstance(name, str) or "." in name:
             return None
         if not isinstance(args, dict):
             return None
-        return [{"id": "call_json", "name": name, "arguments": args}]
+        return {"id": "call_json", "name": name, "arguments": args}
 
     @staticmethod
     def _to_ollama_msg(m: dict) -> dict:

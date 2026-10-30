@@ -73,5 +73,10 @@ class Config:
         """Agent 的读写工作区"""
         return self.data_dir / "workspace"
 
+    @property
+    def skills_dir(self) -> Path:
+        """按需加载的技能目录：{DATA_DIR}/skills/<名字>/SKILL.md"""
+        return self.data_dir / "skills"
+
 
 config = Config()

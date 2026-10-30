@@ -23,6 +23,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from .checks import audit
+
 TINY_LIMIT = 600        # 短于这个字数，跳过逐段抽取
 SEG_SIZE = 1200         # 每段上限字数（越小模型覆盖越细，但调用次数变多）
 MAX_TOTAL = 200_000     # 总字数上限，超了就明确告知截断
@@ -233,6 +235,9 @@ class DocumentAnalyst:
         body = self._fill_numbers(body, text)
         body = self._fill_people(body)
         body = self._fill_empty(body)
+        # 代码层自检：数字出处、章节覆盖、结构完整
+        # 模型编数字 / 漏章节靠提示词管不住，这里用确定性规则核对，有问题如实写进报告
+        body = self._self_check(body, text)
 
         # 覆盖范围由代码强制附加，模型漏了也不影响
         if notices:
@@ -447,6 +452,23 @@ class DocumentAnalyst:
                 # 末尾补空行：否则下一个 "## " 紧贴列表项，部分渲染器会当成列表的一部分
                 lines[start + 1 : end] = ["", "- 无", ""]
         return "\n".join(lines)
+
+    @staticmethod
+    def _self_check(md: str, text: str) -> str:
+        """对报告做确定性核对，有疑点就如实追加「自检」一节。
+
+        写进报告而不是偷偷改掉，是因为用户需要知道哪几个数拿不准——
+        悄悄修正会让整份报告看起来都可信，反而更危险。
+        """
+        try:
+            result = audit(md, text)
+        except Exception:
+            return md  # 核对本身出问题，不能影响报告交付
+        lines = result.summary()
+        if not lines:
+            return md
+        block = "\n".join(f"- {l}" for l in lines)
+        return f"{md}\n\n## 自检\n{block}\n"
 
     @staticmethod
     def _fix_empty_structure(md: str) -> str:
