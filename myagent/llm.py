@@ -539,11 +539,16 @@ def build_llm(cfg) -> BaseLLM:
     raise ValueError(f"未知后端: {cfg.backend}")
 
 
-def ping(llm: BaseLLM, timeout_note: str = "") -> tuple[bool, str]:
-    """发一次最小请求，确认模型真的能用。
+def ping(llm: BaseLLM, timeout_note: str = "", check_tools: bool = False) -> tuple[bool, str]:
+    """确认模型真的能用。
 
     给界面上的「测试连接」用。只判断"能不能拿到回复"，
     不评判回答质量——那是评测脚本的事。
+
+    check_tools=True 时多做一轮工具调用往返：先让模型发起一次工具调用，
+    再把「调用 + 结果」作为历史回传。这一步是必须的——只发两句普通对话
+    测不出消息格式是否被厂商接受，之前就出现过「测试连接通过、
+    正式对话第二轮必报 422」的落差。
     """
     import time
 
@@ -562,13 +567,74 @@ def ping(llm: BaseLLM, timeout_note: str = "") -> tuple[bool, str]:
     text = (out.get("content") or "").strip()
     if not text:
         return False, f"连上了，但模型没有返回文字（耗时 {cost:.1f}s）。换个模型名再试。"
-    return True, f"连通正常（{cost:.1f}s）：{text[:30]}"
+
+    if not check_tools or not getattr(llm, "supports_tools", False):
+        return True, f"连通正常（{cost:.1f}s）：{text[:30]}"
+
+    ok, note = _probe_tool_roundtrip(llm)
+    if not ok:
+        return False, f"能对话，但工具调用走不通：{note}。这个模型接进来会聊两句就报错。"
+    return True, f"连通正常（{cost:.1f}s）：{text[:24]}｜{note}"
+
+
+def _probe_tool_roundtrip(llm: BaseLLM) -> tuple[bool, str]:
+    """跑一次真实的工具调用 + 历史回传，验证厂商接受我们的消息格式。
+
+    模型不支持或没触发工具调用不算失败（还能纯聊天），只如实说明。
+    """
+    tool = {
+        "name": "calculator",
+        "description": "计算四则运算表达式",
+        "parameters": {
+            "type": "object",
+            "properties": {"expr": {"type": "string", "description": "算式，如 23*7"}},
+            "required": ["expr"],
+        },
+    }
+    msgs = [
+        {"role": "system", "content": "需要计算时必须调用 calculator，不要自己心算。"},
+        {"role": "user", "content": "用 calculator 算一下 23*7 等于多少"},
+    ]
+    try:
+        first = llm.chat(msgs, tools=[tool], options={"temperature": 0, "num_predict": 128})
+    except Exception as e:  # noqa: BLE001
+        return False, _explain(e)
+
+    calls = first.get("tool_calls") or []
+    if not calls:
+        return True, "该模型这次没发起工具调用，纯对话可用，工具能力待观察"
+
+    tc = calls[0]
+    msgs.append({"role": "assistant", "content": first.get("content") or "", "tool_calls": calls})
+    msgs.append(
+        {
+            "role": "tool",
+            "content": "161",
+            "tool_call_id": tc.get("id") or "call_0",
+            "name": tc.get("name") or "calculator",
+        }
+    )
+    try:
+        second = llm.chat(msgs, tools=[tool], options={"temperature": 0, "num_predict": 128})
+    except Exception as e:  # noqa: BLE001
+        return False, f"回传工具结果时被拒绝（{_explain(e)}）"
+    if not (second.get("content") or second.get("tool_calls")):
+        return False, "回传工具结果后模型没有给出任何内容"
+    return True, "工具调用往返正常"
+
 
 
 def _explain(e: Exception) -> str:
     """把常见报错翻成能照着修的中文"""
     text = str(e)
     low = text.lower()
+    if "422" in text or "unprocessable" in low:
+        if "缺失字段" in text or "missing" in low or "field required" in low:
+            return (
+                "厂商拒收了消息格式（422 字段缺失）。"
+                f"若反复出现，把这段原文反馈一下：{text[:140]}"
+            )
+        return f"厂商认为请求参数不合法（422）：{text[:140]}"
     if "401" in text or "unauthorized" in low or "invalid api key" in low or "invalid_api_key" in low:
         return "密钥被拒绝（401）。检查是否复制完整、是否和所选厂商对得上。"
     if "403" in text or "permission" in low:
@@ -579,6 +645,8 @@ def _explain(e: Exception) -> str:
         return "被限流或余额不足（429）。稍后重试，或检查账户余额。"
     if "timeout" in low or "timed out" in low:
         return "连接超时。可能是网络不通，或该厂商在境内需要代理。"
+    if any(c in text for c in ("500", "502", "503", "504")) or "bad gateway" in low or "internal server" in low:
+        return f"对方服务端出错（5xx），不是你的配置问题。稍后重试或换个模型。原始信息：{text[:120]}"
     if "connection" in low or "resolve" in low:
         return f"连不上这个地址，检查接口地址是否写错、网络是否可达。原始信息：{text[:120]}"
     return f"调用失败：{text[:200]}"

@@ -427,7 +427,7 @@ def test_model_fn(pid: str, model: str, key: str, base_url: str, vision: str):
         candidate = build_llm(_tmp_cfg(pid, model, key, base_url, vision))
     except Exception as e:
         return f"❌ 配置有误：{e}"
-    ok, msg = ping(candidate)
+    ok, msg = ping(candidate, check_tools=True)
     return ("✅ " if ok else "❌ ") + msg
 
 
