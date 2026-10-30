@@ -390,12 +390,58 @@ class OpenAICompatLLM(BaseLLM):
     def supports_tools(self) -> bool:
         return True
 
+    @staticmethod
+    def _to_openai_msg(m: dict) -> dict:
+        """
+        把内部统一格式转成 OpenAI 协议要求的格式。
+
+        内部历史里 assistant 的工具调用是扁平的 {id, name, arguments}，
+        tool 消息还带 name 字段——本地 Ollama 原生接口能容忍，
+        但云端 OpenAI 兼容服务会严格校验 schema，缺 function 字段
+        直接 422「缺失字段」拒收，表现为第一轮能答、第二轮必挂。
+        必须在发出去之前转成标准结构。
+        """
+        import json as _json
+
+        role = m.get("role")
+        content = m.get("content")
+
+        if role == "assistant" and m.get("tool_calls"):
+            tcs = []
+            for i, tc in enumerate(m["tool_calls"]):
+                args = tc.get("arguments")
+                # 协议要求 arguments 是字符串，不是对象
+                if isinstance(args, str):
+                    args_str = args
+                else:
+                    args_str = _json.dumps(args or {}, ensure_ascii=False)
+                tcs.append(
+                    {
+                        "id": tc.get("id") or f"call_{i}",
+                        "type": "function",
+                        "function": {"name": tc.get("name", ""), "arguments": args_str},
+                    }
+                )
+            return {"role": "assistant", "content": content, "tool_calls": tcs}
+
+        if role == "tool":
+            # tool 消息只保留 tool_call_id；name 字段部分服务不认，去掉更稳
+            return {
+                "role": "tool",
+                "content": content if content is not None else "",
+                "tool_call_id": m.get("tool_call_id") or "call_0",
+            }
+
+        # 其余角色：content 缺失时补空串，避免 null 被严格服务拒收
+        return {"role": role, "content": content if content is not None else ""}
+
     def chat(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
         options: dict | None = None,
     ) -> dict:
+        messages = [self._to_openai_msg(m) for m in messages]
         kwargs: dict[str, Any] = {"model": self._model, "messages": messages}
         if tools:
             kwargs["tools"] = [{"type": "function", "function": t} for t in tools]
