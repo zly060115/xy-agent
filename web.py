@@ -64,10 +64,12 @@ READER = SafeFileReader(
 )
 
 # --- 上传目录：加进白名单，这样上传的文件也能通过安全校验 ---
-UPLOAD_DIR = Path(__file__).parent / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
-if UPLOAD_DIR.resolve() not in READER.allowed_dirs:
-    READER.allowed_dirs.append(UPLOAD_DIR.resolve())
+UPLOAD_DIR = config.uploads_dir
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+for _d in (UPLOAD_DIR, config.workspace_dir, config.data_dir):
+    _d.mkdir(parents=True, exist_ok=True)
+    if _d.resolve() not in READER.allowed_dirs:
+        READER.allowed_dirs.append(_d.resolve())
 
 # 网页模式下确认由前端弹窗处理；这里用 callback 模式
 GATEWAY = ConfirmGateway(mode="callback", timeout=120)

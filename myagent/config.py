@@ -2,7 +2,26 @@
 # 本地试用阶段 → backend = "ollama"
 # 以后接 API ↘ backend = "api"，再填下面三项
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# 无论从哪个目录启动，都加载项目根的 .env
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+
+def _default_data_dir() -> Path:
+    """数据目录：记忆库/知识库/上传文件/工作区的家。
+
+    优先取 .env 里的 DATA_DIR；没配则放用户主目录 ~/.xiaoman。
+    默认在代码目录之外，代码怎么搬、开源、重装都不影响积累的数据。
+    """
+    env = (os.getenv("DATA_DIR") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".xiaoman"
 
 
 @dataclass
@@ -35,6 +54,24 @@ class Config:
     # 上下文窗口。默认 4096 会截断长文档，这里给到 8192；
     # 8G 显存跑 7B 是安全线，显存更大可以调到 16384
     num_ctx: int = 8192
+
+    # ---- 数据目录（记忆库/知识库/上传文件/工作区） ----
+    data_dir: Path = field(default_factory=_default_data_dir)
+
+    @property
+    def chroma_dir(self) -> Path:
+        """向量库：知识库 + 对话长期记忆"""
+        return self.data_dir / "chroma_db"
+
+    @property
+    def uploads_dir(self) -> Path:
+        """网页上传的原始文档"""
+        return self.data_dir / "uploads"
+
+    @property
+    def workspace_dir(self) -> Path:
+        """Agent 的读写工作区"""
+        return self.data_dir / "workspace"
 
 
 config = Config()

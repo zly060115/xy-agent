@@ -15,7 +15,9 @@ from .runtime import get_runtime
 
 # ---------- 会话工作区（Agent 可自由读写的沙盒） ----------
 # 放在项目目录下，用户能直接看到 Agent 产出的文件，不用去别处翻
-WORKSPACE = Path(__file__).resolve().parent.parent / "workspace"
+from .config import config
+
+WORKSPACE = config.workspace_dir
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 
 
@@ -35,7 +37,7 @@ def _resolve_input_path(p: str) -> str:
         return p
     bases = [
         WORKSPACE,
-        Path(__file__).resolve().parent.parent / "uploads",
+        config.uploads_dir,
         Path(__file__).resolve().parent.parent,
     ]
     for base in bases:

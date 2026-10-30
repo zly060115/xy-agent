@@ -23,7 +23,9 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-FIXDIR = ROOT / "workspace" / "doc_fixtures"
+from myagent.config import config
+
+FIXDIR = config.workspace_dir / "doc_fixtures"
 FIXDIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------- 生成夹具 ----------------

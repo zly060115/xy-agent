@@ -68,12 +68,28 @@ ollama pull nomic-embed-text
 
 # 3. 配置
 copy .env.example .env
-# 编辑 .env，至少设置 ALLOWED_FILE_DIRS
+# 编辑 .env：
+#   DATA_DIR            数据目录（记忆库/知识库/上传文件/工作区），
+#                       留空 = 用户主目录下 .xiaoman，建议放代码之外
+#   ALLOWED_FILE_DIRS   额外允许 Agent 读取的目录（数据目录会自动加入白名单）
 
 # 4. 启动
 .venv\Scripts\python.exe main.py          # 命令行
 .venv\Scripts\python.exe web.py           # 网页端 http://127.0.0.1:7860
 ```
+
+## 数据目录（与代码分离）
+
+所有会积累的数据都在 `DATA_DIR`（默认 `~/.xiaoman`）下，代码目录保持干净：
+
+```
+~/.xiaoman/
+├── chroma_db/    # 向量库：知识库 + 对话长期记忆
+├── uploads/      # 网页上传的原始文档
+└── workspace/    # Agent 的读写工作区
+```
+
+这样做的好处：开源、换电脑、重新 clone 代码互不影响；备份这个目录 = 备份全部记忆。
 
 ## 文件安全机制
 
@@ -171,9 +187,12 @@ TOOLS["weather"] = {
 │   ├── llm.py         # 双模型后端
 │   ├── runtime.py     # 全局组件容器
 │   └── config.py
-├── workspace/         # Agent 产出文件（写文件都落这里）
-├── uploads/           # 网页上传的临时文件
-└── chroma_db/         # 向量数据（自动生成）
+└── kb_test/           # 测试资料（含 Agent 搭建方法论）
+
+数据目录（DATA_DIR，默认 ~/.xiaoman，不随代码走）：
+├── chroma_db/         # 向量数据：知识库 + 对话记忆
+├── uploads/           # 网页上传的原始文档
+└── workspace/         # Agent 读写工作区
 ```
 
 ## 已知限制

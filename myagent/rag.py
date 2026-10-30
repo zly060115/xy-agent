@@ -14,7 +14,9 @@ from pathlib import Path
 import chromadb
 from chromadb.config import Settings
 
-DB_DIR = Path(__file__).parent / "chroma_db"
+from .config import config
+
+DB_DIR = config.chroma_dir
 
 # 双库结构：两个独立的 collection，互不覆盖
 COLLECTION_FILES = "knowledge_files"    # 文件解析入库
