@@ -1,0 +1,27 @@
+# ===== Python 运行环境 =====
+.venv/
+__pycache__/
+*.pyc
+
+# ===== 本地配置与日志（含本地路径，不公开） =====
+.env
+web.log
+
+# ===== 私人数据：绝不公开 =====
+# 用户上传的个人文件（实验报告、简历、PDF 等）
+uploads/
+# 向量库（含私有文档切片）
+myagent/chroma_db/
+# 本地记忆
+.workbuddy/memory/
+# 工作区私人文件与测试夹具
+workspace/
+# 任何 sqlite
+*.sqlite3
+
+# ===== kb_test：只保留可公开的方法论文档 =====
+kb_test/*
+!kb_test/Agent搭建方法论.md
+
+# 保留：.env.example 是公开配置模板
+!.env.example
