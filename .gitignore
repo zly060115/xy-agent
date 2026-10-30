@@ -28,3 +28,4 @@ kb_test/*
 
 # 保留：.env.example 是公开配置模板
 !.env.example
+.workbuddy/*.log
