@@ -479,7 +479,14 @@ class OpenAICompatLLM(BaseLLM):
         # 与本地后端同样的毛病：模型把调用写成文本，标记会直接印给用户
         if content and TOOL_TAG_RE.search(content):
             content = TOOL_TAG_RE.sub("", content).strip() or None
-        return {"content": content, "tool_calls": tool_calls}
+        choice = resp.choices[0]
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            # 推理型模型（deepseek-flash、GLM-4.5 这类）会先花一串 token 思考，
+            # 预算给小了就会出现「200 但 content 为空」，要让上层能分辨原因
+            "finish_reason": getattr(choice, "finish_reason", None),
+        }
 
 
 class UnavailableLLM(BaseLLM):
@@ -578,13 +585,22 @@ def ping(llm: BaseLLM, timeout_note: str = "", check_tools: bool = False) -> tup
                 {"role": "system", "content": "只回答一个字，不要解释。"},
                 {"role": "user", "content": "在吗"},
             ],
-            options={"temperature": 0, "num_predict": 16},
+            # 预算不能给小：推理型模型（deepseek-flash / GLM-4.5 / Qwen3-thinking）
+            # 会先写一段思考再给正文。给 16 个 token 的话思考就用完了，
+            # 返回 200 但 content 是空的，看着像「密钥不对」，其实是预算不够。
+            options={"temperature": 0, "num_predict": 512},
         )
     except Exception as e:  # noqa: BLE001 - 任何异常都要变成人能看懂的话
         return False, _explain(e)
     cost = time.time() - started
     text = (out.get("content") or "").strip()
     if not text:
+        if out.get("finish_reason") == "length":
+            return False, (
+                "模型连上了，但输出预算被思考过程占满，没来得及给正文"
+                "（推理型模型的常见现象，耗时 {:.1f}s）。"
+                "换成非推理模型，或把模型名后面的 -thinking / -reasoning 后缀去掉再试。"
+            ).format(cost)
         return False, f"连上了，但模型没有返回文字（耗时 {cost:.1f}s）。换个模型名再试。"
 
     if not check_tools or not getattr(llm, "supports_tools", False):
@@ -615,7 +631,7 @@ def _probe_tool_roundtrip(llm: BaseLLM) -> tuple[bool, str]:
         {"role": "user", "content": "用 calculator 算一下 23*7 等于多少"},
     ]
     try:
-        first = llm.chat(msgs, tools=[tool], options={"temperature": 0, "num_predict": 128})
+        first = llm.chat(msgs, tools=[tool], options={"temperature": 0, "num_predict": 1024})
     except Exception as e:  # noqa: BLE001
         return False, _explain(e)
 
@@ -634,7 +650,7 @@ def _probe_tool_roundtrip(llm: BaseLLM) -> tuple[bool, str]:
         }
     )
     try:
-        second = llm.chat(msgs, tools=[tool], options={"temperature": 0, "num_predict": 128})
+        second = llm.chat(msgs, tools=[tool], options={"temperature": 0, "num_predict": 1024})
     except Exception as e:  # noqa: BLE001
         return False, f"回传工具结果时被拒绝（{_explain(e)}）"
     if not (second.get("content") or second.get("tool_calls")):

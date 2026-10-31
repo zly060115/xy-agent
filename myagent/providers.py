@@ -57,10 +57,12 @@ PROVIDERS: tuple[Provider, ...] = (
         name="DeepSeek 深度求索",
         kind="api",
         base_url="https://api.deepseek.com",
-        models=("deepseek-v4-flash", "deepseek-v4-pro"),
+        models=("deepseek-flash", "deepseek-v4-pro"),
+        vision_models=("deepseek-flash",),
         key_url="https://platform.deepseek.com/api_keys",
         note="便宜、中文强、工具调用稳，最推荐作为本地模型的第一替代。"
-        "deepseek-v4-flash 日常够用，v4-pro 适合复杂推理。" + _NOTE_TOOLS,
+        "deepseek-flash（V4.1-Flash）日常够用且能直接读图，v4-pro 适合复杂推理。"
+        "模型名以 /v1/models 返回为准，别凭印象填。" + _NOTE_TOOLS,
     ),
     Provider(
         id="dashscope",
@@ -191,8 +193,8 @@ RECOMMENDED: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "deepseek",
-        "deepseek-v4-flash",
-        "💰 deepseek-v4-flash · DeepSeek —— 大厂里最便宜，中文强、工具调用稳",
+        "deepseek-flash",
+        "💰 deepseek-flash · DeepSeek —— 大厂里最便宜，中文强、工具调用稳",
     ),
     (
         "zhipu",

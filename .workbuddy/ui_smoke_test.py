@@ -46,7 +46,7 @@ check("没有残留的启动错误", web.STARTUP_ERR == "", web.STARTUP_ERR)
 
 print("=== 2. 切厂商联动 ===")
 up = web.on_provider_change("deepseek")
-check("返回 5 个组件更新（含清除快速选择）", len(up) == 5, len(up))
+check("返回 6 个组件更新（含清除快速选择、带回密钥）", len(up) == 6, len(up))
 check("接口地址换成 DeepSeek", "api.deepseek.com" in (up[1].get("value") or ""), up[1])
 check("模型列表非空", len(up[0].get("choices") or []) > 0)
 check("说明里带密钥申请地址", "platform.deepseek.com" in (up[2].get("value") or ""))
@@ -68,7 +68,7 @@ check("提示带密钥申请地址", "open.bigmodel.cn" in (up[5] or ""), up[5])
 
 up = web.pick_model_fn("ollama::qwen2.5:7b")
 check("本地卡片提示免密钥", "不需要密钥" in (up[5] or ""), up[5])
-check("空输入不崩", len(web.pick_model_fn(None)) == 6)
+check("空输入不崩", len(web.pick_model_fn(None)) == 7)
 check("未知卡片返回空提示", web.pick_model_fn("nope::x")[5] == "")
 check(
     "卡片数量与精选推荐一致",

@@ -314,11 +314,24 @@ def _status_md() -> str:
         warn = f"\n\n⚠️ 启动时配置有问题：{STARTUP_ERR}"
     if config.backend == "api":
         warn += f"\n\n密钥保存在 `{config.settings_file}`（仅本机，不进代码库）"
+    memo = settings.remembered_providers(config.data_dir)
+    if memo:
+        names = "、".join(providers.label(pid) for pid in memo)
+        warn += f"\n\n🔑 已记住 {len(memo)} 家厂商的密钥：{names}（点对应卡片会自动带回，不用重填）"
     return head + body + warn
 
 
 def model_status_fn():
     return _status_md()
+
+
+def _key_hint(pid: str) -> tuple[object, str]:
+    """这家厂商是否有记住的密钥：有就填回输入框（密码框显示为圆点），并给一句话。"""
+    rec = settings.remembered(config.data_dir, pid) or {}
+    k = (rec.get("api_key") or "").strip()
+    if k:
+        return gr.update(value=k), f"已记住你的密钥（{settings.mask(k)}），不用重填"
+    return gr.update(value=""), ""
 
 
 def on_provider_change(pid: str):
@@ -330,19 +343,21 @@ def on_provider_change(pid: str):
     p = providers.get(pid)
     if p is None:
         empty = gr.update()
-        return empty, empty, empty, empty, empty
+        return empty, empty, empty, empty, empty, empty
     models = [(m, m) for m in p.models]
     note = f"**{p.name}**"
     if p.note:
         note += "\n\n" + p.note
     if p.key_url:
         note += f"\n\n密钥申请：{p.key_url}"
+    key_upd, _ = _key_hint(pid)
     return (
         gr.update(choices=models, value=(p.models[0] if p.models else "")),
         gr.update(value=p.base_url),
         gr.update(value=note),
         gr.update(value=(p.vision_models[0] if p.vision_models else "")),
         gr.update(value=None),  # 快速选择卡片取消点亮
+        key_upd,
     )
 
 
@@ -354,21 +369,23 @@ def pick_model_fn(card: str | None):
     """
     empty = gr.update()
     if not card:
-        return empty, empty, empty, empty, empty, ""
+        return empty, empty, empty, empty, empty, "", empty
     pid, _, model = card.partition("::")
     p = providers.get(pid)
     if not p or not model:
-        return empty, empty, empty, empty, empty, ""
+        return empty, empty, empty, empty, empty, "", empty
+    key_upd, hint = _key_hint(pid)
     if p.need_key:
-        tip = (
-            f"**已选 {p.name} · {model}**。下一步：在下面粘贴你的密钥"
-            f"（申请：{p.key_url}）→ 点「测试连接」→ 点「保存并启用」。"
+        step = (
+            "密钥已记住，点「测试连接」→「保存并启用」即可。"
+            if hint
+            else f"在下面粘贴你的密钥（申请：{p.key_url}）→ 点「测试连接」→ 点「保存并启用」。"
         )
     else:
-        tip = (
-            f"**已选 {p.name} · {model}**。本地模型不需要密钥，"
-            "直接点下方「保存并启用」。"
-        )
+        step = "本地模型不需要密钥，直接点下方「保存并启用」。"
+    tip = f"**已选 {p.name} · {model}**。下一步：{step}"
+    if hint:
+        tip += f"\n\n✅ {hint}"
     return (
         pid,
         gr.update(choices=[(m, m) for m in p.models], value=model),
@@ -376,6 +393,7 @@ def pick_model_fn(card: str | None):
         p.note,
         (p.vision_models[0] if p.vision_models else ""),
         tip,
+        key_upd,
     )
 
 
@@ -407,17 +425,20 @@ def _tmp_cfg(pid: str, model: str, key: str, base_url: str, vision: str):
 
 
 def _effective_key(pid: str, key: str) -> str:
-    """界面留空时沿用已保存的那把密钥。
+    """界面留空时，用这家厂商自己上次保存的密钥。
 
-    换模型（同一家）不该逼用户重新粘一次密钥；但换厂商必须重填，
-    否则会把上一家的密钥发到新厂商，报错还会指向错的厂商。
+    以前只在「当前生效且是云端模式」时才沿用，于是切到本地模型再切回来，
+    密钥就找不到了，用户被迫重新粘贴。现在按厂商分别记：
+    deepseek 的 key 只给 deepseek 用，不会被带到达摩院那边去。
     """
     k = (key or "").strip()
     if k:
         return k
     if pid == getattr(config, "provider", "") and config.backend == "api":
-        return (config.api_key or "").strip()
-    return ""
+        cur = (config.api_key or "").strip()
+        if cur:
+            return cur
+    return (settings.remembered(config.data_dir, pid).get("api_key") or "").strip()
 
 
 def test_model_fn(pid: str, model: str, key: str, base_url: str, vision: str):
@@ -593,7 +614,7 @@ with gr.Blocks(title="小满 Agent") as demo:
         with gr.Tab("模型"):
             gr.Markdown(
                 "**换模型不用改代码、不用重启。** 在「快速选择」里点一张卡片就配好；"
-                "需要密钥的粘贴一把，先「测试连接」再「保存并启用」。\n\n"
+                "密钥每家只填一次，之后点回这家卡片会自动带回。\n\n"
                 "密钥保存在本地数据目录的 `settings.json` 里（不进代码库、不会被推到 GitHub），"
                 "界面只显示掩码。本地 Ollama 不需要密钥。"
             )
@@ -610,13 +631,15 @@ with gr.Blocks(title="小满 Agent") as demo:
             )
             pick_note = gr.Markdown()
 
+            _memo = settings.remembered_providers(config.data_dir)
             key_tb = gr.Textbox(
-                label="API 密钥",
+                label="API 密钥（每家只填一次，之后点卡片自动带回）",
                 type="password",
+                value=(settings.remembered(config.data_dir, config.provider).get("api_key") or ""),
                 placeholder=(
-                    f"已保存：{settings.mask(config.api_key)}（留空则沿用）"
-                    if config.api_key
-                    else "本地模型不需要；云端模型粘贴你自己的密钥"
+                    f"已记住：{'、'.join(providers.label(p) for p in _memo)}"
+                    if _memo
+                    else "本地模型不需要；云端模型粘贴你自己的密钥，保存后下次自动带回"
                 ),
             )
 
@@ -670,7 +693,7 @@ with gr.Blocks(title="小满 Agent") as demo:
             pick.change(
                 pick_model_fn,
                 pick,
-                [prov_dd, model_dd, url_tb, prov_note, vis_tb, pick_note],
+                [prov_dd, model_dd, url_tb, prov_note, vis_tb, pick_note, key_tb],
                 api_visibility="private",
             )
             # 用 .input 而不是 .change：程序填值（点卡片）也会触发 .change，
@@ -678,7 +701,7 @@ with gr.Blocks(title="小满 Agent") as demo:
             prov_dd.input(
                 on_provider_change,
                 prov_dd,
-                [model_dd, url_tb, prov_note, vis_tb, pick],
+                [model_dd, url_tb, prov_note, vis_tb, pick, key_tb],
                 api_name="provider_info",
             )
             test_btn.click(
