@@ -547,10 +547,15 @@ with gr.Blocks(title="小满 Agent") as demo:
             chatbot = gr.Chatbot(label="对话", height=460)
             with gr.Row():
                 msg_box = gr.Textbox(
-                    placeholder="说个目标，比如：帮我总结知识库里关于 XX 的内容",
+                    # lines 必须是 1：Gradio 6 的键盘规则是「单行时 Enter 发送、
+                    # 多行时 Enter 换行（要 Shift+Enter 才发送）」。原来写 lines=2，
+                    # 输入框一打开就是多行，按 Enter 只会换行，看起来像发送坏了。
+                    # max_lines 让内容变长时自动撑高，不挤成一行。
+                    placeholder="说个目标，比如：帮我总结知识库里关于 XX 的内容（Enter 发送，Shift+Enter 换行）",
                     scale=5,
                     show_label=False,
-                    lines=2,
+                    lines=1,
+                    max_lines=6,
                 )
                 send_btn = gr.Button("发送", variant="primary", scale=1)
 

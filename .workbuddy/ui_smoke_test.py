@@ -102,5 +102,34 @@ check("提示清除成功", msg.startswith("✅"), msg.splitlines()[0] if msg el
 check("回到 .env 的本地模型", web.LLM.name.startswith("ollama/"), web.LLM.name)
 check("设置文件已删除", not (Path(_TMP) / "settings.json").exists())
 
+print("=== 6. 输入框回车发送 ===")
+# Gradio 6 的规则：输入框是单行时 Enter 才触发 submit，多行时 Enter 只换行。
+# 这里锁住 lines=1，否则用户按 Enter 只会换行，看起来像"发送按钮坏了"。
+check("输入框初始单行（Enter 才会发送）", web.msg_box.lines == 1, web.msg_box.lines)
+check("输入框可自动撑高", web.msg_box.max_lines == 6, web.msg_box.max_lines)
+_sub = [
+    (ev, fn.api_name)
+    for fn in web.demo.fns.values()
+    for b, ev in (getattr(fn, "targets", None) or [])
+    if b == web.msg_box._id
+]
+check("输入框绑定了 submit 事件", any(ev == "submit" for ev, _ in _sub), _sub)
+check("submit 与按钮走同一个处理函数", any(name == "chat_fn" for _, name in _sub), _sub)
+_out_ids = [
+    [getattr(o, "_id", o) for o in (fn.outputs or [])]
+    for fn in web.demo.fns.values()
+    for b, ev in (getattr(fn, "targets", None) or [])
+    if b == web.msg_box._id and ev == "submit"
+]
+check(
+    "提交后同时更新输入框与对话区",
+    any(
+        ids[0] == web.msg_box._id and web.chatbot._id in ids
+        for ids in _out_ids
+        if ids
+    ),
+    _out_ids,
+)
+
 print(f"\n通过 {passed} 项，失败 {failed} 项")
 sys.exit(0 if failed == 0 else 1)
