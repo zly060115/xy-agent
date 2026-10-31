@@ -100,6 +100,8 @@ copy .env.example .env
   （保留控制台 + 窗口内 F12 开发者工具）。
 
 图标由 `.workbuddy/make_icon.py` 生成（PIL 画圆角渐变 + 「满」字）。
+桌面快捷方式由 `.workbuddy/make_shortcut.py` 创建：指向 `pythonw.exe` 而不是
+`.bat`，双击不闪黑框，图标用 `assets/icon.ico`；换电脑或搬目录后跑一次即可重建。
 网页端照常可用：`web.py` 起的服务，桌面窗口和浏览器可以同时连。
 
 ## 数据目录（与代码分离）
