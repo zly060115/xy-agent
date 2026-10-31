@@ -508,6 +508,24 @@ class UnavailableLLM(BaseLLM):
         )
 
 
+def normalize_base_url(url: str) -> str:
+    """把用户填的接口地址补成 SDK 能直接用形状。
+
+    自定义厂商经常只填 `https://xxx.com`，OpenAI SDK 会拼成
+    `https://xxx.com/chat/completions`，而真实厂商的接口基本都在 `/v1` 下面，
+    结果就是一个 404，看起来像"密钥不对"。这里只补「完全没写路径」这一种情况；
+    已经带 /v1、/api/paas/v4、/compatible-mode/v1 这类路径的一律不动。
+    """
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return u
+    from urllib.parse import urlparse
+
+    if urlparse(u).path in ("", "/"):
+        u += "/v1"
+    return u
+
+
 def build_llm(cfg) -> BaseLLM:
     """按配置造一个模型后端"""
     if cfg.backend == "ollama":
@@ -529,6 +547,7 @@ def build_llm(cfg) -> BaseLLM:
             raise ValueError(f"{providers.label(pid)} 需要 API 密钥{where}")
         if not base_url:
             raise ValueError(f"{providers.label(pid)} 缺少接口地址（base_url）")
+        base_url = normalize_base_url(base_url)
         return OpenAICompatLLM(
             model=cfg.model,
             api_key=key,
@@ -650,4 +669,9 @@ def _explain(e: Exception) -> str:
     if "connection" in low or "resolve" in low:
         return f"连不上这个地址，检查接口地址是否写错、网络是否可达。原始信息：{text[:120]}"
     return f"调用失败：{text[:200]}"
+
+
+# 给上层用的公开别名：对话链路里模型报错时，也要走同一套中文解释，
+# 否则用户看到的是一整段 OpenAI SDK 的英文异常。
+explain_error = _explain
 

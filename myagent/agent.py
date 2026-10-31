@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 from .checks import number_guard
 from .config import config
-from .llm import BaseLLM
+from .llm import BaseLLM, explain_error
 from .runtime import get_runtime
 from .skills import SkillStore
 from .tools import WORKSPACE, execute_tool, get_tool_specs
@@ -277,7 +277,14 @@ class Agent:
 
         for step in range(1, self.max_steps + 1):
             self._log(f"\n[第 {step} 步] 思考中…")
-            result = self.llm.chat(self.messages, get_tool_specs())
+            try:
+                result = self.llm.chat(self.messages, get_tool_specs())
+            except Exception as e:  # noqa: BLE001
+                # 密钥错、地址错、限流都是配置问题，不是程序崩溃。
+                # 以前异常直接冒到界面上，用户看到的是一段 SDK 英文堆栈。
+                hint = explain_error(e)
+                self._log(f"\n❌ 调用模型失败：{hint}")
+                return f"调用模型失败：{hint}"
             content = result.get("content")
             tool_calls = result.get("tool_calls") or []
 
