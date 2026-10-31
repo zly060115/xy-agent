@@ -1,0 +1,12 @@
+# 统一换行符：避免 Windows 提交时满屏 "LF will be replaced by CRLF" 警告
+* text=auto eol=lf
+
+# Windows 批处理必须保持 CRLF，否则 cmd 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.pdf binary
+*.docx binary

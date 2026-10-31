@@ -29,3 +29,8 @@ kb_test/*
 # 保留：.env.example 是公开配置模板
 !.env.example
 .workbuddy/*.log
+
+# ===== 测试生成的图片（由 .workbuddy/make_*_doc.py 重新生成，不入库） =====
+.workbuddy/fig_*.png
+.workbuddy/ocr_test.png
+.workbuddy/table_like.png
