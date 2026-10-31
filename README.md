@@ -1,4 +1,4 @@
-# 小满 Agent
+# XY
 
 一个能自己动手办事的本地 Agent，带本地知识库、安全文件读取和人工确认。
 
@@ -76,7 +76,7 @@ ollama pull nomic-embed-text
 copy .env.example .env
 # 编辑 .env：
 #   DATA_DIR            数据目录（记忆库/知识库/上传文件/工作区），
-#                       留空 = 用户主目录下 .xiaoman，建议放代码之外
+#                       留空 = 用户主目录下 .xy，建议放代码之外
 #   ALLOWED_FILE_DIRS   额外允许 Agent 读取的目录（数据目录会自动加入白名单）
 #   ALLOWED_WRITE_DIRS  Agent 能写的目录，留空 = 桌面/文档/下载
 #   （模型不用在这里配，启动后到网页「模型」标签页点选即可）
@@ -93,10 +93,10 @@ copy .env.example .env
 
 - **窗口先出来，界面后加载**。双击后立刻看到启动画面；Gradio（chromadb、
   onnxruntime 这些都要好几秒）在后台线程加载，就绪后自动切进主界面。
-- **端口复用**。7860 已有小满在跑就直接接入（秒开），被别的程序占用就换端口，
+- **端口复用**。7860 已有 XY 在跑就直接接入（秒开），被别的程序占用就换端口，
   不会抢。
 - **关窗即退**。窗口关闭后连服务线程一起收掉，任务管理器里不留 `python.exe`。
-- 日志在 `~/.xiaoman/desktop.log`；排查界面问题用 `desktop.bat -d`
+- 日志在 `~/.xy/desktop.log`；排查界面问题用 `desktop.bat -d`
   （保留控制台 + 窗口内 F12 开发者工具）。
 
 图标由 `.workbuddy/make_icon.py` 生成（PIL 画圆角渐变 + 「满」字）。
@@ -106,10 +106,10 @@ copy .env.example .env
 
 ## 数据目录（与代码分离）
 
-所有会积累的数据都在 `DATA_DIR`（默认 `~/.xiaoman`）下，代码目录保持干净：
+所有会积累的数据都在 `DATA_DIR`（默认 `~/.xy`）下，代码目录保持干净：
 
 ```
-~/.xiaoman/
+~/.xy/
 ├── chroma_db/       # 向量库：知识库 + 对话长期记忆
 ├── uploads/         # 网页上传的原始文档
 ├── workspace/       # Agent 的读写工作区
@@ -276,7 +276,7 @@ MODEL=deepseek-v4-flash
 | OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` 等「厂商/型号」 |
 | 自定义 | 自己填 | 自建 vLLM / LM Studio / 公司网关 |
 
-**密钥存在哪、安全吗**：存在 `DATA_DIR/settings.json`（默认 `~/.xiaoman/`），
+**密钥存在哪、安全吗**：存在 `DATA_DIR/settings.json`（默认 `~/.xy/`），
 **明文**、只在本机、已在 `.gitignore` 里，不会跟着代码推到 GitHub；界面只显示掩码。
 为什么不明文加密：本地单用户工具加一层密码，最常见的结局是用户自己忘了密码、
 密钥找不回来。需要更严的话请用系统的密钥管理（或只填临时 key 用完就清除）。
@@ -373,7 +373,7 @@ TOOLS["weather"] = {
 │   └── config.py
 └── kb_test/           # 测试资料（含 Agent 搭建方法论）
 
-数据目录（DATA_DIR，默认 ~/.xiaoman，不随代码走）：
+数据目录（DATA_DIR，默认 ~/.xy，不随代码走）：
 ├── chroma_db/         # 向量数据：知识库 + 对话记忆
 ├── uploads/           # 网页上传的原始文档
 ├── workspace/         # Agent 读写工作区

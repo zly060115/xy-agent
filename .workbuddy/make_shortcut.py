@@ -1,4 +1,4 @@
-"""在桌面创建/更新「小满 Agent」快捷方式（桌面版）
+"""在桌面创建/更新「XY」快捷方式（桌面版）
 
 为什么不用 WScript.Shell：COM 实例化会被安全策略拦下（试过，被 block）。
 这里用 pylnk3 直接写 .lnk 二进制，纯 Python，不碰 COM。
@@ -44,13 +44,13 @@ def desktop_dir() -> Path:
 
 
 DESK = desktop_dir()
-LNK = DESK / "小满 Agent.lnk"
+LNK = DESK / "XY.lnk"
 
 pylnk3.for_file(
     str(PY),
     lnk_name=str(LNK),
     arguments=f'"{ENTRY}"',
-    description="小满 Agent - 本地文档分析助手",
+    description="XY - 本地文档分析助手",
     icon_file=str(ICON),
     work_dir=str(ROOT),
     window_mode=pylnk3.WINDOW_NORMAL,

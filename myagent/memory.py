@@ -61,7 +61,7 @@ class ConversationMemory:
         if any(m in reply for m in FAILURE_MARKS):
             return False  # 没答上来的对话不入库
 
-        text = f"用户：{user_text}\n\n小满：{reply[:MAX_CHARS]}"
+        text = f"用户：{user_text}\n\nXY：{reply[:MAX_CHARS]}"
         if len(text) < MIN_CHARS:
             return False  # "你好/谢谢"这类短交互没有记忆价值
 

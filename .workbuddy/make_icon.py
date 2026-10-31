@@ -1,7 +1,7 @@
 """生成桌面版图标：assets/icon.ico（多尺寸）+ assets/icon.png
 
-设计上不画复杂图形：一个圆角方块 + 琥珀色渐变 + 白色「满」字。
-小尺寸（16px）下只有这种大色块 + 单字还能看清。
+设计上不画复杂图形：一个圆角方块 + 琥珀色渐变 + 白色「XY」字母。
+小尺寸（16px）下只有这种大色块 + 两个字母还能看清。
 """
 
 from pathlib import Path
@@ -31,29 +31,31 @@ ImageDraw.Draw(mask).rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.22
 img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
 img.paste(grad, (0, 0), mask)
 
-# 字：微软雅黑 Bold 优先，退回黑体
+# 字：英文字母用无衬线粗体最利落，退回雅黑加粗
 FONT = None
-for p in ("C:/Windows/Fonts/msyhbd.ttc", "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"):
+for p in ("C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/msyhbd.ttc"):
     if Path(p).exists():
         FONT = p
         break
 if FONT is None:
-    raise SystemExit("找不到中文字体，无法生成图标")
+    raise SystemExit("找不到粗体字体，无法生成图标")
 
+TEXT = "XY"
 draw = ImageDraw.Draw(img)
-size = 520
+size = 560
 font = ImageFont.truetype(FONT, size)
-while size > 200:
-    box = draw.textbbox((0, 0), "满", font=font)
-    if box[2] - box[0] <= S * 0.62 and box[3] - box[1] <= S * 0.62:
+while size > 120:
+    box = draw.textbbox((0, 0), TEXT, font=font, stroke_width=0)
+    w, h = box[2] - box[0], box[3] - box[1]
+    if w <= S * 0.56 and h <= S * 0.56:
         break
-    size -= 20
+    size -= 16
     font = ImageFont.truetype(FONT, size)
-box = draw.textbbox((0, 0), "满", font=font)
-# 视觉居中：用字形的实际外框，而不是 font size 的理论行高
+box = draw.textbbox((0, 0), TEXT, font=font)
+# 视觉居中：用字形实际外框，而不是 font size 的理论行高
 x = (S - (box[2] - box[0])) / 2 - box[0]
 y = (S - (box[3] - box[1])) / 2 - box[1]
-draw.text((x, y), "满", font=font, fill=(255, 255, 255, 255))
+draw.text((x, y), TEXT, font=font, fill=(255, 255, 255, 255))
 
 OUT.mkdir(parents=True, exist_ok=True)
 img.save(OUT / "icon.png")

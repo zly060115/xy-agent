@@ -67,7 +67,7 @@ print("=" * 60)
 print("1. 说「已创建」却没调工具 → 打回后真的写出来")
 fake = FakeLLM(
     [
-        {"content": "我已经在您的桌面上创建了文件 小满测试.md，内容如下……", "tool_calls": []},
+        {"content": "我已经在您的桌面上创建了文件 XY 测试.md，内容如下……", "tool_calls": []},
         {
             "content": "",
             "tool_calls": [
@@ -83,7 +83,7 @@ fake = FakeLLM(
 )
 mem = FakeMemory()
 ag = Agent(fake, verbose=False, use_rag=False, memory=mem)
-out = ag.run("在我桌面写一个文档，文件名 小满测试.md")
+out = ag.run("在我桌面写一个文档，文件名 XY 测试.md")
 p = Path(TARGET)
 check("模型被追问了一次", fake.calls >= 3, f"calls={fake.calls}")
 check("文件真的写出来了", p.exists(), TARGET)
@@ -120,7 +120,7 @@ for text, want in cases:
 print("=" * 60)
 print("4. 声称识别")
 yes = [
-    "我已经在您的桌面上创建了文件 小满测试.md",
+    "我已经在您的桌面上创建了文件 XY 测试.md",
     "已写入 C:\\Users\\zly\\Desktop\\x.md（6 字符）",
     "文件已成功保存",
     "文档已经生成好了",

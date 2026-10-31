@@ -5,7 +5,7 @@
   填 DeepSeek 密钥 → 保存 → 切到本地 Ollama 保存 → 再切回 DeepSeek
 期望：密钥自动带回，输入框留空也能用；同时不能把 A 家的密钥带进 B 家。
 
-全程在临时数据目录里跑，不碰真实的 ~/.xiaoman。
+全程在临时数据目录里跑，不碰真实的 ~/.xy。
 """
 
 import json
@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 
 # 必须在 import web 之前设好：config 在导入时就会读 DATA_DIR
-_TMP = tempfile.mkdtemp(prefix="xiaoman_memo_")
+_TMP = tempfile.mkdtemp(prefix="xy_memo_")
 os.environ["DATA_DIR"] = _TMP
 os.environ["PROVIDER"] = "ollama"
 
@@ -113,7 +113,7 @@ check("模型名已更新", read_file(d)["saved"]["deepseek"]["model"] == "deeps
 
 # ---------- 8. 老格式文件迁移 ----------
 print("\n[8] 老版本 settings.json（没有 saved 字段）")
-d2 = tempfile.mkdtemp(prefix="xiaoman_old_")
+d2 = tempfile.mkdtemp(prefix="xy_old_")
 settings.path_for(d2).write_text(
     json.dumps(
         {
@@ -133,7 +133,7 @@ check("迁移后 deepseek 密钥没丢", settings.remembered(d2, "deepseek")["ap
 
 # ---------- 9. 写坏文件不影响启动 ----------
 print("\n[9] 文件被写坏时容错")
-d3 = tempfile.mkdtemp(prefix="xiaoman_bad_")
+d3 = tempfile.mkdtemp(prefix="xy_bad_")
 settings.path_for(d3).write_text("{ 坏掉的 json", encoding="utf-8")
 check("load 返回空而不是抛异常", settings.load(d3) == {})
 check("remembered 返回空", settings.remembered(d3, "deepseek") == {})

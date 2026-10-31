@@ -31,7 +31,7 @@ meta2, body2 = _parse_frontmatter("没有头的正文")
 check("无头时整篇为正文", meta2 == {} and body2 == "没有头的正文", (meta2, body2))
 
 print("=== 扫描真实目录 ===")
-store = SkillStore(Path.home() / ".xiaoman" / "skills")
+store = SkillStore(Path.home() / ".xy" / "skills")
 skills = store.load()
 check("扫到 doc-analysis", any(s.name == "doc-analysis" for s in skills), [s.name for s in skills])
 ds = store.get("doc-analysis")

@@ -1,5 +1,5 @@
 """
-小满 Agent 桌面版（pywebview 外壳）
+XY 桌面版（pywebview 外壳）
 
 网页端（web.py）打开的是浏览器标签页，这个文件把它装进一个原生窗口：
 有自己的标题栏、任务栏图标，没有地址栏，关掉窗口就是退出程序。
@@ -12,7 +12,7 @@
    所以这里先渲染一个本地 splash 页面，再在后台线程里把服务拉起来。
 
 2. 端口不抢别人的，也不重复起一份。
-   7860 被占用时先问一句"是不是小满自己在跑"：是就直接接上去，
+   7860 被占用时先问一句"是不是 XY 自己在跑"：是就直接接上去，
    不是才换端口。既不误杀别的程序，也不会出现两份服务抢同一个知识库。
 
 3. 关窗 = 进程真的退出。
@@ -43,7 +43,7 @@ if str(ROOT) not in sys.path:
 
 from myagent.config import config  # noqa: E402
 
-APP_NAME = "小满 Agent"
+APP_NAME = "XY"
 WIN_W, WIN_H = 1280, 860
 MIN_W, MIN_H = 980, 640
 ICON = ROOT / "assets" / "icon.ico"
@@ -89,10 +89,12 @@ SPLASH_HTML = """<!doctype html>
   .logo {
     width:88px; height:88px; border-radius:26px;
     background:linear-gradient(145deg,#fbbf24,#d97706);
-    color:#fff; font-size:44px; font-weight:600;
+    color:#fff; font-size:30px; font-weight:700;
+    font-family:"Segoe UI","Microsoft YaHei UI",sans-serif;
     display:flex; align-items:center; justify-content:center;
     box-shadow:0 12px 28px rgba(217,119,6,.28);
-    letter-spacing:0;
+    letter-spacing:1px;
+    text-indent:1px;
   }
   .name { margin-top:22px; font-size:19px; font-weight:600; letter-spacing:.5px; }
   .sub  { margin-top:6px; font-size:12px; color:#9ca3af; letter-spacing:.3px; }
@@ -120,8 +122,8 @@ SPLASH_HTML = """<!doctype html>
 </style></head>
 <body>
   <div class="wrap">
-    <div class="logo">满</div>
-    <div class="name">小满 Agent</div>
+    <div class="logo">XY</div>
+    <div class="name">XY</div>
     <div class="sub">本地文档分析助手</div>
     <div class="bar"><i></i></div>
     <div class="status" id="status">正在准备…</div>
@@ -178,18 +180,18 @@ def port_free(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) != 0
 
 
-def is_xiaoman(port: int) -> bool:
-    """占用这个端口的是不是小满自己。
+def is_self(port: int) -> bool:
+    """占用这个端口的是不是 XY 自己。
 
     只看端口通不通没用：那可能是别的程序。真要判断就看 Gradio 的 config
-    里的 title —— 是我们自己的 Blocks(title="小满 Agent") 才算数。
+    里的 title —— 是我们自己的 Blocks(title="XY") 才算数。
     判断不出来（比如 4.x 端点不同）就当作不是，换个端口起，稳妥。
     """
     for ep in (f"/gradio_api/config", f"/config"):
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}{ep}", timeout=1.5) as r:
                 data = json.loads(r.read().decode("utf-8", "ignore"))
-            if "小满" in str(data.get("title", "")):
+            if "XY" in str(data.get("title", "")):
                 return True
         except Exception:
             continue
@@ -197,9 +199,9 @@ def is_xiaoman(port: int) -> bool:
 
 
 def pick_port(preferred: int) -> tuple[int, bool]:
-    """返回 (端口, 是否已在运行的小满)。"""
+    """返回 (端口, 是否已在运行的 XY)。"""
     if not port_free(preferred):
-        if is_xiaoman(preferred):
+        if is_self(preferred):
             return preferred, True
         for p in range(preferred + 1, preferred + 20):
             if port_free(p):
@@ -254,7 +256,7 @@ def boot(window, preferred_port: int) -> None:
         port, running = pick_port(preferred_port)
 
         if running:
-            say(window, "检测到已在运行的小满，正在接入…")
+            say(window, "检测到已在运行的 XY，正在接入…")
         else:
             say(window, "正在加载模型与知识库（首次启动稍慢）…")
             # 延迟导入：这一句要好几秒，放在窗口出来之后才不白屏

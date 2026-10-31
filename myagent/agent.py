@@ -38,7 +38,7 @@ def scrubbed_rag_tags(text: str) -> str:
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
 
-BASE_PROMPT = """你是小满，一个跑在用户自己电脑上的助手，能自己动手办事。数据不出这台机器。
+BASE_PROMPT = """你是 XY，一个跑在用户自己电脑上的助手，能自己动手办事。数据不出这台机器。
 
 ## 一、这些情况必须调用工具，不许凭脑子答
 - 算数、比例、百分比、汇总 → calculator。你的心算经常算错，任何计算都不许心算

@@ -16,13 +16,13 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 def _default_data_dir() -> Path:
     """数据目录：记忆库/知识库/上传文件/工作区的家。
 
-    优先取 .env 里的 DATA_DIR；没配则放用户主目录 ~/.xiaoman。
+    优先取 .env 里的 DATA_DIR；没配则放用户主目录 ~/.xy。
     默认在代码目录之外，代码怎么搬、开源、重装都不影响积累的数据。
     """
     env = (os.getenv("DATA_DIR") or "").strip()
     if env:
         return Path(env).expanduser()
-    return Path.home() / ".xiaoman"
+    return Path.home() / ".xy"
 
 
 @dataclass

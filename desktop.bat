@@ -25,7 +25,7 @@ rem ---- debug mode: keep console, enable devtools ----
 if /i "%~1"=="-d" (
     title Xiaoman Agent (desktop debug)
     echo [debug] console stays open; press Ctrl+C to stop.
-    echo [debug] log: %USERPROFILE%\.xiaoman\desktop.log
+    echo [debug] log: %USERPROFILE%\.xy\desktop.log
     .venv\Scripts\python.exe desktop.py --debug
     echo.
     echo Desktop app exited with code %errorlevel%.
@@ -34,7 +34,7 @@ if /i "%~1"=="-d" (
 )
 
 rem ---- normal launch: pythonw = no black console window ----
-rem Errors still land in %USERPROFILE%\.xiaoman\desktop.log .
+rem Errors still land in %USERPROFILE%\.xy\desktop.log .
 if exist ".venv\Scripts\pythonw.exe" (
     start "" ".venv\Scripts\pythonw.exe" desktop.py
 ) else (

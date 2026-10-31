@@ -1,4 +1,4 @@
-"""Skill 加载：把「按需注入的提示词模块」接进小满。
+"""Skill 加载：把「按需注入的提示词模块」接进 XY。
 
 为什么需要这一层：
 GitHub 上的 Agent Skills（anthropics/skills 等）本质就是

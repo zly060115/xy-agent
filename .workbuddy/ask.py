@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""通过 HTTP API 向运行中的小满提问，打印最终回答。
+"""通过 HTTP API 向运行中的 XY 提问，打印最终回答。
 用法: python .workbuddy/ask.py "问题"
 """
 import json

@@ -535,8 +535,8 @@ def reset_chat():
 
 # ---------- 界面 ----------
 
-with gr.Blocks(title="小满 Agent") as demo:
-    gr.Markdown("# 小满 Agent\n能自己动手办事的本地助手。可以读文档、查知识库、写文件。")
+with gr.Blocks(title="XY") as demo:
+    gr.Markdown("# XY\n能自己动手办事的本地助手。可以读文档、查知识库、写文件。")
     # 顶部这条要能刷新：做成组件，切换模型后跟着变。
     # 以前是写死的 f-string，模型 Tab 里明明切成功了，标题还显示旧模型，
     # 用户会以为切换没生效。
@@ -778,7 +778,7 @@ if __name__ == "__main__":
         if "empty port" in low or "address already in use" in low or "10048" in low:
             print()
             print(f"[启动失败] 端口 {_port} 已被占用，网页起不来。")
-            print(f"  1) 如果小满已经在跑，直接打开 http://127.0.0.1:{_port} 即可")
+            print(f"  1) 如果 XY 已经在跑，直接打开 http://127.0.0.1:{_port} 即可")
             print(f"  2) 要用别的端口：先执行 set WEB_PORT=7861，再重新启动")
             print(f"  3) 想知道是谁占着：netstat -ano | findstr :{_port}")
             raise SystemExit(2)

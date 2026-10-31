@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
 # 用临时数据目录，绝不碰真实配置
-os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="xiaoman_api_"))
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="xy_api_"))
 
 import web  # noqa: E402
 

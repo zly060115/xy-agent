@@ -57,17 +57,17 @@ desk = next((d for d in config.write_dirs if d.name.lower() == "desktop"), None)
 if desk is None:
     print("  [SKIP] 没找到桌面目录")
 else:
-    target = desk / "_xiaoman_write_test.md"
+    target = desk / "_xy_write_test.md"
     cleanup.append(target)
-    r = tool_write_file(str(target), "# 桌面测试\n由小满写入。\n")
+    r = tool_write_file(str(target), "# 桌面测试\n由 XY 写入。\n")
     check("返回成功", r.startswith("✅"), r)
     check("报告里带「桌面」", "桌面" in r, r)
     check("文件落在桌面", target.exists())
-    check("内容正确", target.exists() and "由小满写入" in target.read_text(encoding="utf-8"))
+    check("内容正确", target.exists() and "由 XY 写入" in target.read_text(encoding="utf-8"))
 
     print("=" * 60)
     print("4. 桌面写 .docx（真 Word 文档）")
-    dx = desk / "_xiaoman_write_test.docx"
+    dx = desk / "_xy_write_test.docx"
     cleanup.append(dx)
     md = "# 测试标题\n\n这是正文段落。\n\n## 小节\n\n- 要点一\n- 要点二\n"
     r = tool_write_file(str(dx), md)
@@ -107,11 +107,11 @@ print("=" * 60)
 print("6. 可执行/非文档扩展名一律拒绝")
 if desk is not None:
     for ext in (".bat", ".exe", ".ps1", ".vbs", ".lnk", ".py", ""):
-        target = desk / f"_xiaoman_bad{ext}"
+        target = desk / f"_xy_bad{ext}"
         why = _write_blocker(_resolve_write_path(str(target)))
         check(f"桌面写 {ext or '无扩展名'} 被拒", why is not None, "竟然可写")
     # 确认没有被偷偷创建
-    created = [p for p in desk.glob("_xiaoman_bad*")]
+    created = [p for p in desk.glob("_xy_bad*")]
     check("坏扩展名没落盘", not created, str(created))
 
 print("=" * 60)
@@ -138,7 +138,7 @@ for f in cleanup:
             f.unlink()
     except OSError as e:
         print(f"  清理失败 {f}: {e}")
-left = [p for p in (desk.glob("_xiaoman_write_test*") if desk else [])]
+left = [p for p in (desk.glob("_xy_write_test*") if desk else [])]
 check("测试文件已清理", not left, str(left))
 
 print("=" * 60)

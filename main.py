@@ -1,5 +1,5 @@
 """
-小满 Agent 主入口
+XY 主入口
 
 用法：
     python main.py                       # 交互模式
@@ -73,7 +73,7 @@ def create_runtime():
 
 def banner(llm, rag, reader):
     print("=" * 60)
-    print("  小满 Agent   |   能自己动手办事")
+    print("  XY   |   能自己动手办事")
     print("=" * 60)
     print(f"  模型    : {llm.name}")
     print(f"  知识库  : {rag.stats()['knowledge_chunks']} 个片段")
@@ -84,7 +84,7 @@ def banner(llm, rag, reader):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="小满 Agent")
+    parser = argparse.ArgumentParser(description="XY")
     parser.add_argument("goal", nargs="*", help="要执行的任务")
     parser.add_argument("--steps", type=int, help="最大步数")
     parser.add_argument("--ingest", help="解析入库一个文件")

@@ -1,4 +1,4 @@
-# 小满 Agent 运行依赖
+# XY 运行依赖
 # 安装：pip install -r requirements.txt
 # 版本为本机实测通过（Python 3.13 / Windows），升级后请跑 .workbuddy/ 下的回归脚本
 

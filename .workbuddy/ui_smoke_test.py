@@ -7,7 +7,7 @@
 - 保存后内存里的模型、Agent、读图组件是否同时切过去（漏一个就是"看起来切了实际没切"）
 - 清除配置能否回到 .env
 
-全程在临时数据目录里跑，不碰真实的 ~/.xiaoman。
+全程在临时数据目录里跑，不碰真实的 ~/.xy。
 """
 
 import os
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 
 # 必须在 import web 之前设好：config 在导入时就会读 DATA_DIR
-_TMP = tempfile.mkdtemp(prefix="xiaoman_ui_")
+_TMP = tempfile.mkdtemp(prefix="xy_ui_")
 os.environ["DATA_DIR"] = _TMP
 
 import web  # noqa: E402
