@@ -60,6 +60,10 @@
 ## 快速开始
 
 ```bash
+# 0. 建虚拟环境并装依赖（需要 Python 3.10+）
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+
 # 1. 确认 Ollama 服务在跑
 ollama serve
 

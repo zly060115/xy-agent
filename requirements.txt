@@ -1,0 +1,28 @@
+# 小满 Agent 运行依赖
+# 安装：pip install -r requirements.txt
+# 版本为本机实测通过（Python 3.13 / Windows），升级后请跑 .workbuddy/ 下的回归脚本
+
+# 界面与 Web 服务
+gradio>=6.30,<7
+
+# 向量库（知识库 + 对话记忆）
+chromadb>=1.5,<2
+
+# 模型接入：ollama=本地原生通道；openai=所有云端厂商的兼容通道
+ollama>=0.6,<1
+openai>=3.39
+httpx>=0.28
+
+# 文档解析
+pypdf>=6.21,<7          # PDF 文字层
+python-docx>=1.2,<2     # 读 docx + 生成真 Word
+pillow>=12.3            # 图片读取与预处理
+
+# OCR（扫描件/截图）
+rapidocr>=3.10
+onnxruntime>=1.31
+
+# 其他
+python-dotenv>=1.2
+numpy>=2.0
+duckduckgo-search>=8.1  # 联网检索工具
