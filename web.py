@@ -306,6 +306,11 @@ def save_style(style: str):
 
 # ---------- 模型选择 ----------
 
+def _header_md() -> str:
+    """页面顶部的当前模型一行，切换后跟着刷新"""
+    return f"当前模型：`{LLM.name}`　·　换模型去「模型」标签页（本地 Ollama 免费，也可填自己的云端密钥）"
+
+
 def _status_md() -> str:
     head = f"**当前模型**：`{LLM.name}`\n\n"
     body = settings.describe(config).replace("\n", "  \n")
@@ -532,9 +537,10 @@ def reset_chat():
 
 with gr.Blocks(title="小满 Agent") as demo:
     gr.Markdown("# 小满 Agent\n能自己动手办事的本地助手。可以读文档、查知识库、写文件。")
-    gr.Markdown(
-        f"当前模型：`{LLM.name}`　·　换模型去「模型」标签页（本地 Ollama 免费，也可填自己的云端密钥）"
-    )
+    # 顶部这条要能刷新：做成组件，切换模型后跟着变。
+    # 以前是写死的 f-string，模型 Tab 里明明切成功了，标题还显示旧模型，
+    # 用户会以为切换没生效。
+    header_model = gr.Markdown(_header_md())
 
     with gr.Tabs():
         with gr.Tab("对话"):
@@ -710,7 +716,7 @@ with gr.Blocks(title="小满 Agent") as demo:
                 model_out,
                 api_name="test_model",
             )
-            # 保存成功后刷新顶部状态条，属于界面内部动作，不对外暴露
+            # 保存成功后刷新顶部状态条与页首的当前模型，属于界面内部动作，不对外暴露
             apply_btn.click(
                 apply_model_fn,
                 [prov_dd, model_dd, key_tb, url_tb, vis_tb],
@@ -718,10 +724,14 @@ with gr.Blocks(title="小满 Agent") as demo:
                 api_name="apply_model",
             ).then(
                 model_status_fn, None, model_now, api_visibility="private"
+            ).then(
+                lambda: _header_md(), None, header_model, api_visibility="private"
             )
             clear_btn.click(
                 clear_model_fn, None, model_out, api_name="clear_model"
-            ).then(model_status_fn, None, model_now, api_visibility="private")
+            ).then(model_status_fn, None, model_now, api_visibility="private").then(
+                lambda: _header_md(), None, header_model, api_visibility="private"
+            )
 
         with gr.Tab("风格"):
             gr.Markdown(
