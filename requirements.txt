@@ -4,6 +4,7 @@
 
 # 界面与 Web 服务
 gradio>=6.30,<7
+pywebview>=6.2          # 桌面版外壳：原生窗口内嵌 WebView2（desktop.py）
 
 # 向量库（知识库 + 对话记忆）
 chromadb>=1.5,<2

@@ -13,6 +13,7 @@
 | 人工确认 | 每次读本地文件都要你点头，Agent 不能私自读 |
 | 双模型后端 | 本地 Ollama / 云端 API，改配置即可切换 |
 | **模型自选** | 13 家厂商预设，网页点选 + 填自己的密钥 + 一键测试连接，热切换不重启 |
+| 桌面版 | 双击 `desktop.bat`，原生窗口打开（pywebview + WebView2），无地址栏、关窗即退 |
 | Gradio 网页 | 对话、文档分析、上传入库、知识库状态、模型选择、风格设置 |
 
 ### 文档分析怎么用
@@ -81,9 +82,25 @@ copy .env.example .env
 #   （模型不用在这里配，启动后到网页「模型」标签页点选即可）
 
 # 4. 启动
-.venv\Scripts\python.exe main.py          # 命令行
-.venv\Scripts\python.exe web.py           # 网页端 http://127.0.0.1:7860
+双击 desktop.bat                        # 桌面版：原生窗口（推荐）
+.venv\Scripts\python.exe main.py        # 命令行
+.venv\Scripts\python.exe web.py         # 网页端 http://127.0.0.1:7860
 ```
+
+## 桌面版（原生窗口）
+
+`desktop.py` 是一个约 300 行的 pywebview 外壳，不碰 `web.py` 和核心逻辑：
+
+- **窗口先出来，界面后加载**。双击后立刻看到启动画面；Gradio（chromadb、
+  onnxruntime 这些都要好几秒）在后台线程加载，就绪后自动切进主界面。
+- **端口复用**。7860 已有小满在跑就直接接入（秒开），被别的程序占用就换端口，
+  不会抢。
+- **关窗即退**。窗口关闭后连服务线程一起收掉，任务管理器里不留 `python.exe`。
+- 日志在 `~/.xiaoman/desktop.log`；排查界面问题用 `desktop.bat -d`
+  （保留控制台 + 窗口内 F12 开发者工具）。
+
+图标由 `.workbuddy/make_icon.py` 生成（PIL 画圆角渐变 + 「满」字）。
+网页端照常可用：`web.py` 起的服务，桌面窗口和浏览器可以同时连。
 
 ## 数据目录（与代码分离）
 
@@ -91,10 +108,12 @@ copy .env.example .env
 
 ```
 ~/.xiaoman/
-├── chroma_db/    # 向量库：知识库 + 对话长期记忆
-├── uploads/      # 网页上传的原始文档
-├── workspace/    # Agent 的读写工作区
-└── skills/       # 按需加载的技能（SKILL.md）
+├── chroma_db/       # 向量库：知识库 + 对话长期记忆
+├── uploads/         # 网页上传的原始文档
+├── workspace/       # Agent 的读写工作区
+├── skills/          # 按需加载的技能（SKILL.md）
+├── webview_cache/   # 桌面版窗口的缓存（可删，删了下次启动稍慢）
+└── desktop.log      # 桌面版日志
 ```
 
 这样做的好处：开源、换电脑、重新 clone 代码互不影响；备份这个目录 = 备份全部记忆。
