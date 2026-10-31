@@ -34,3 +34,4 @@ kb_test/*
 .workbuddy/fig_*.png
 .workbuddy/ocr_test.png
 .workbuddy/table_like.png
+.workbuddy/commit_msg.txt
