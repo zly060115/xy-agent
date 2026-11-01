@@ -460,7 +460,10 @@ def tool_search_knowledge(query: str, top_k: int = 4) -> str:
         parts.append(
             f"[{i}] 来源: {h['source']}  (相关度 {h['score']:.2f})\n{h['text']}"
         )
-    return _as_data("\n\n---\n\n".join(parts), "知识库检索片段")
+    # 把「本次几条」和「库里共几条」分开写：7B 会把 top_k=4 的返回
+    # 当成"库里只有 4 段"，用户问"知识库里有多少内容"时就答错（实测过）
+    head = f"本次返回 {len(hits)} 段；知识库共 {stats['knowledge_chunks']} 段"
+    return _as_data(head + "\n\n" + "\n\n---\n\n".join(parts), "知识库检索片段")
 
 
 def tool_knowledge_stats() -> str:
@@ -664,6 +667,57 @@ TOOLS = {
         },
     },
 }
+
+
+# ---------- 对外暴露（API / MCP）的工具白名单 ----------
+#
+# 网页端是一个人自己用，权限越大越方便。对外接口不一样：
+# 调用方是另一个程序，出问题的概率高十倍，而后果落在这台机器上。
+# 所以默认只放只读和查询类，三个危险工具要显式开启：
+#
+#   run_command        shell=True + 5 个词的黑名单，实际上约等于任意命令执行
+#   write_file         能写桌面 / 文档 / 下载
+#   ingest_local_file  能往知识库里塞内容，污染后续所有检索
+#
+# 开启方式：set XY_EXTERNAL_ALLOW=write,shell,ingest
+EXTERNAL_SAFE_TOOLS = {
+    "now",
+    "list_files",
+    "read_file",
+    "search_web",
+    "calculator",
+    "search_knowledge",
+    "knowledge_stats",
+    "list_local_files",
+    "read_local_file",
+    "analyze_document",
+}
+
+_EXTERNAL_UNLOCKABLE: dict[str, set[str]] = {
+    "write": {"write_file"},
+    "shell": {"run_command"},
+    "ingest": {"ingest_local_file"},
+}
+
+
+def external_tool_names() -> list[str]:
+    """对外可用的工具名（按 TOOLS 的注册顺序，保证输出稳定）。"""
+    unlocked = {
+        x.strip().lower()
+        for x in (os.getenv("XY_EXTERNAL_ALLOW") or "").split(",")
+        if x.strip()
+    }
+    allowed = set(EXTERNAL_SAFE_TOOLS)
+    for key, names in _EXTERNAL_UNLOCKABLE.items():
+        if key in unlocked:
+            allowed |= names
+    return [name for name in TOOLS if name in allowed]
+
+
+def external_tool_specs() -> list[dict]:
+    """对外可用的工具说明书，供 MCP / API 生成元数据。"""
+    names = set(external_tool_names())
+    return [t["spec"] for t in TOOLS.values() if t["spec"]["name"] in names]
 
 
 def get_tool_specs() -> list[dict]:

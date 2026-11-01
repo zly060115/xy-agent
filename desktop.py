@@ -246,6 +246,14 @@ def _launch_kwargs() -> dict:
         "footer_links": ["gradio"],
         "quiet": True,
     }
+    # 桌面版和网页版必须挂同一套 /api/v1 路由，否则同一份代码在
+    # 两种启动方式下能力不一致（桌面版调不通接口，排查时很容易误判）
+    try:
+        import web as webui
+
+        kw["app_kwargs"] = webui.extra_app_kwargs()
+    except Exception as e:
+        log(f"附加 API 路由失败（不影响界面）：{e}")
     return kw
 
 
@@ -271,6 +279,11 @@ def boot(window, preferred_port: int) -> None:
                 kw = {k: v for k, v in kw.items() if k in sig.parameters}
             demo.launch(**kw)
             log(f"Gradio 已启动：127.0.0.1:{port}")
+            try:
+                if webui.api_module.auth_enabled():
+                    log(f"对外接口：http://127.0.0.1:{port}/api/v1  （文档 /api/v1/docs）")
+            except Exception:
+                pass
 
             say(window, "正在等待服务就绪…")
             wait_http(port)

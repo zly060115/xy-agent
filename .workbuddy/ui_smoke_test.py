@@ -86,7 +86,13 @@ print("=== 4. 保存并热切换 ===")
 msg = web.apply_model_fn("deepseek", "deepseek-v4-flash", "sk-ui-test-4321", "", "")
 check("提示切换成功", msg.startswith("✅"), msg.splitlines()[0] if msg else "")
 check("全局模型已换", web.LLM.name == "deepseek/deepseek-v4-flash", web.LLM.name)
-check("Agent 用的是新模型", web.AGENT.llm.name == web.LLM.name, web.AGENT.llm.name)
+web.POOL.get("web")  # 确保池里至少有一个实例可查
+_agent_models = [a.llm.name for a in web.POOL.agents()]
+check(
+    "Agent 用的是新模型",
+    bool(_agent_models) and all(n == web.LLM.name for n in _agent_models),
+    _agent_models,
+)
 check("读图组件也换了", web.READER.vision.name == web.LLM.name, web.READER.vision.name)
 check(
     "设置文件落在临时数据目录",

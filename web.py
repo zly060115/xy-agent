@@ -29,61 +29,24 @@ from myagent.agent import Agent
 from myagent.confirm import ConfirmGateway
 from myagent.config import config
 from myagent.memory import ConversationMemory
-from myagent import providers, settings
+from myagent.sessions import AgentPool
+from myagent import bootstrap, providers, settings
 from myagent.llm import UnavailableLLM, build_llm, ping
 from myagent.rag import RAGStore, build_embed_fn
 from myagent.runtime import set_runtime
 from myagent.safe_reader import SafeFileReader
 
+# 对外 HTTP 接口（/api/v1），路由在 launch 时挂到 Gradio 自带的 FastAPI 上
+import api as api_module
+
 # ---------- 初始化运行时 ----------
-config.backend = os.getenv("BACKEND", config.backend)
-config.model = os.getenv("MODEL", config.model) or config.model
-config.ollama_host = os.getenv("OLLAMA_HOST", config.ollama_host) or config.ollama_host
-config.api_key = os.getenv("API_KEY", config.api_key) or ""
-config.base_url = os.getenv("BASE_URL", config.base_url) or config.base_url
-config.max_steps = int(os.getenv("MAX_STEPS", config.max_steps))
-# 图片理解：视觉模型留空则只用 OCR
-config.vision_model = os.getenv("VISION_MODEL", config.vision_model) or ""
-config.ocr_enabled = os.getenv("OCR_ENABLED", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-    "off",
-)
-config.max_images = int(os.getenv("MAX_IMAGES", config.max_images) or config.max_images)
-config.vision_max_images = int(
-    os.getenv("MAX_VISION_IMAGES", config.vision_max_images) or config.vision_max_images
-)
-
-# 只由 .env 决定的状态快照：用户在界面上点「清除配置」时回到这里
-ENV_BASELINE = {
-    "backend": config.backend,
-    "model": config.model,
-    "ollama_host": config.ollama_host,
-    "api_key": config.api_key,
-    "base_url": config.base_url,
-    "vision_model": config.vision_model,
-    "provider": "ollama" if config.backend == "ollama" else providers.guess_id(config.base_url),
-}
-
-# 界面里保存过的模型选择优先于 .env：界面是显式动作，.env 可能早就过期
-if not settings.apply_to(config):
-    config.provider = ENV_BASELINE["provider"]
-
-try:
-    LLM = build_llm(config)
-    STARTUP_ERR = ""
-except Exception as e:  # 配置不全也要能打开网页，否则用户连改配置的入口都没有
-    LLM = UnavailableLLM(str(e))
-    STARTUP_ERR = str(e)
-
-RAG = RAGStore(embed_fn=build_embed_fn())
-READER = SafeFileReader(
-    vision=LLM,
-    ocr_enabled=config.ocr_enabled,
-    max_images=config.max_images,
-    vision_max_images=config.vision_max_images,
-)
+# 装配细节在 myagent/bootstrap.py —— MCP 服务进程共用同一份，
+# 避免"网页能用的模型，MCP 里报错"这类两处漂移的问题
+ENV_BASELINE = bootstrap.load_env_config()
+bootstrap.apply_saved_or_env(ENV_BASELINE)
+LLM, STARTUP_ERR = bootstrap.build_llm_or_unavailable()
+RAG = bootstrap.build_rag()
+READER = bootstrap.build_reader(LLM)
 
 # --- 上传目录：加进白名单，这样上传的文件也能通过安全校验 ---
 UPLOAD_DIR = config.uploads_dir
@@ -97,12 +60,32 @@ for _d in (UPLOAD_DIR, config.workspace_dir, config.data_dir):
 GATEWAY = ConfirmGateway(mode="callback", timeout=120)
 set_runtime(llm=LLM, rag=RAG, reader=READER, gateway=GATEWAY)
 
-AGENT = Agent(
-    LLM,
-    max_steps=config.max_steps,
-    verbose=False,
-    memory=ConversationMemory(RAG),
+def _make_agent() -> Agent:
+    """
+    造一个会话专属的 Agent。
+
+    LLM 和 RAG 是共享的（换模型、加知识库对所有会话立即生效），
+    只有 messages 跟着会话走 —— 这就是 AgentPool 存在的理由。
+    style_prompt 由 Agent.__init__ 自己从环境变量读，新会话自动继承。
+    """
+    return Agent(
+        LLM,
+        max_steps=config.max_steps,
+        verbose=False,
+        memory=ConversationMemory(RAG),
+    )
+
+
+# 会话池：网页固定用 "web"，外部接口用调用方给的 session_id。
+# 以前这里是 AGENT 模块级单例，两个调用方会共用同一份对话历史。
+POOL = AgentPool(
+    _make_agent,
+    max_sessions=int(os.getenv("MAX_SESSIONS", "16")),
+    ttl=float(os.getenv("SESSION_TTL", "1800")),
 )
+
+# 会话池与检索器交给 API 层，必须在 launch 之前
+api_module.bind(POOL, RAG)
 
 
 # ---------- 回调 ----------
@@ -111,7 +94,7 @@ def chat_fn(message: str, history: list):
     if not message.strip():
         return "", history
     try:
-        reply = AGENT.run(message)
+        reply = POOL.run("web", message)
     except Exception as e:
         reply = f"出错了：{type(e).__name__}: {e}"
     history = history + [
@@ -299,8 +282,9 @@ def stats_fn():
 
 def save_style(style: str):
     os.environ["STYLE_PROMPT"] = style.strip()
-    AGENT.style_prompt = style.strip()
-    AGENT.reset()
+    # 风格是进程级设置，但状态挂在每个实例上，逐个同步；
+    # 之后新建的会话由 Agent.__init__ 从环境变量继承，不用再管
+    POOL.each(lambda a: (setattr(a, "style_prompt", style.strip()), a.reset()))
     return "✅ 风格已应用（仅影响措辞，不影响工具调用）"
 
 
@@ -463,10 +447,10 @@ def _activate(new_llm) -> None:
     """把新模型接到正在运行的所有组件上，不用重启服务"""
     global LLM
     LLM = new_llm
-    AGENT.llm = new_llm
     READER.vision = new_llm
     set_runtime(llm=new_llm, reader=READER)
-    AGENT.reset()
+    # 已存在的会话逐个换模型并清空上下文（换了模型，旧上下文多半对不上）
+    POOL.each(lambda a: (setattr(a, "llm", new_llm), a.reset()))
 
 
 def apply_model_fn(pid: str, model: str, key: str, base_url: str, vision: str):
@@ -529,7 +513,7 @@ def clear_model_fn():
 
 
 def reset_chat():
-    AGENT.reset()
+    POOL.each(lambda a: a.reset())
     return [], "上下文已清空"
 
 
@@ -757,6 +741,17 @@ with gr.Blocks(title="XY") as demo:
     demo.load(model_status_fn, None, model_now, api_visibility="private")
 
 
+def extra_app_kwargs() -> dict:
+    """
+    launch 时附加给内部 FastAPI 的参数。
+
+    做成函数而不是常量：路由是 import 期注册的，但 desktop.py 在
+    自己的线程里另调一次 launch，用函数保证两条启动路径拿到同一份
+    最新路由，不会一边有一边没有。
+    """
+    return {"routes": api_module.all_routes()}
+
+
 if __name__ == "__main__":
     _port = int(os.getenv("WEB_PORT", 7860))
     try:
@@ -766,11 +761,21 @@ if __name__ == "__main__":
             inbrowser=True,
             theme=gr.themes.Soft(),
             show_error=True,
+            # 把 /api/v1 挂进 Gradio 内部那个 FastAPI（它就是 fastapi.FastAPI 子类）
+            app_kwargs=extra_app_kwargs(),
             # 底部只留 "built with Gradio"，藏掉「Use via API / 设置 / 运行历史」：
             # 那个页面是给程序调用的接口文档，普通用户点进去只会看到一堆函数名。
             # 端点本身照旧可用，用法见 README「HTTP API」一节。
             footer_links=["gradio"],
         )
+        # 对外接口的入口提示：不给出来，用户不知道 token 在哪、文档在哪
+        if api_module.auth_enabled():
+            print()
+            print(f"[对外接口] 已就绪：http://127.0.0.1:{_port}/api/v1")
+            print(f"           接口文档：http://127.0.0.1:{_port}/api/v1/docs")
+            print(f"           Token   ：{api_module.api_token()}")
+            print("           （也保存在数据目录的 api_token.txt 里；")
+            print("            不想鉴权可设 API_AUTH=off，仅建议在本机使用）")
     except OSError as e:
         # 端口被占用时 gradio 抛的是英文堆栈，用户看不懂也找不到原因。
         # 这里给一句能照着做的话，而不是让 Python 栈糊满窗口。

@@ -3,6 +3,7 @@
 一个能自己动手办事的本地 Agent，带本地知识库、安全文件读取和人工确认。
 
 > 完整技术文档（架构、模块、配置、接口、排错）：**[docs/技术文档.md](docs/技术文档.md)**
+> 要让别的程序或 Agent 调用（HTTP / SSE / MCP）：**[docs/对接指南.md](docs/对接指南.md)**
 
 ## 核心能力
 
@@ -283,7 +284,41 @@ MODEL=deepseek-v4-flash
 为什么不明文加密：本地单用户工具加一层密码，最常见的结局是用户自己忘了密码、
 密钥找不回来。需要更严的话请用系统的密钥管理（或只填临时 key 用完就清除）。
 
-## HTTP API（程序调用）
+## 对外接口（/api/v1 与 MCP）
+
+除网页之外，XY 还能被别的程序或 Agent 调用。完整说明见
+**[docs/对接指南.md](docs/对接指南.md)**，这里只给最短路径。
+
+**HTTP**：启动后控制台会打印接口地址和 Token，浏览器打开 `/api/v1/docs` 是 Swagger UI。
+
+```bash
+TOKEN=$(cat ~/.xy/api_token.txt)
+curl -X POST http://127.0.0.1:7860/api/v1/chat \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"message":"知识库里关于 RAG 的内容","session_id":"demo"}'
+```
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/health` | 探活（免鉴权） |
+| `POST /api/v1/chat` | 一次问答，等结果 |
+| `POST /api/v1/chat/stream` | 一次问答，SSE 推执行步骤 |
+| `POST /api/v1/kb/search` | 语义检索 |
+| `GET /api/v1/kb/stats` | 知识库统计 |
+| `GET /api/v1/tools` | 对外工具清单 |
+| `GET /api/v1/sessions` | 会话池状态 |
+
+**MCP**：在 Claude Desktop / Cursor 的配置里加一段 command 就能把 XY 当工具包挂上，
+共 11 个工具（`ask_xy` 复合 + 10 个原子）。config 写法见对接指南第 2 节。
+
+**默认只读**：`run_command`、`write_file`、`ingest_local_file` 不对外暴露。
+其中 `run_command` 是 `shell=True` + 5 个词的黑名单，实质上接近任意命令执行，
+所以必须显式解锁：`set XY_EXTERNAL_ALLOW=write,shell,ingest`。
+
+外部调用按 `session_id` 隔离会话，同一会话串行、跨会话并行 —— 两个 Agent 同时
+调不会互相污染上下文。
+
+## Gradio 原生端点（界面内部用）
 
 网页底部「Use via API」打开的是**接口文档页**（`http://127.0.0.1:7860/?view=api`），
 正常使用界面访问 `http://127.0.0.1:7860/` 就行。对外只暴露 10 个端点，

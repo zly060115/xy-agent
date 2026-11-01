@@ -27,3 +27,6 @@ onnxruntime>=1.31
 python-dotenv>=1.2
 numpy>=2.0
 duckduckgo-search>=8.1  # 联网检索工具
+
+# 对外协议：MCP 服务（mcp_server.py，stdio 传输）
+mcp>=2.3
